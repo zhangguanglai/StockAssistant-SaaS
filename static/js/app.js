@@ -97,6 +97,13 @@ setup(){
     const stockFinanceData=ref(null),stockFinanceLoading=ref(false);
     const chipsData=ref(null),chipsLoading=ref(false);
     const stockNorthboundData=ref(null),stockNorthboundLoading=ref(false);
+    
+    // 个股财务详情弹窗
+    const showStockFinanceModal=ref(false);
+    const stockFinanceModalTitle=ref('');
+    const stockFinanceModalCode=ref('');
+    const stockFinanceSubTab=ref('indicator');
+    const stockFinanceHealth=ref({score:0,level:'-',roe:0,gross:0,debt:0});
 
     // ============================================================
     // Auth State
@@ -817,6 +824,105 @@ setup(){
         finally{stockFinanceLoading.value=false}
     }
 
+    // 打开个股财务详情弹窗（持仓/自选使用）
+    async function openStockFinanceModal(ts_code,name){
+        stockFinanceModalCode.value=ts_code;
+        stockFinanceModalTitle.value=name||ts_code;
+        stockFinanceSubTab.value='indicator';
+        stockFinanceLoading.value=true;
+        showStockFinanceModal.value=true;
+        
+        try{
+            const fr=await fetchWithAuth(`${API}/api/stock/${ts_code}/finance`);
+            const data=await fr.json();
+            stockFinanceData.value=data;
+            // 计算财务健康评分
+            calculateFinanceHealth(data);
+            // 如果切换到营收趋势tab，渲染图表
+            nextTick(()=>{
+                if(stockFinanceSubTab.value==='income'&&data?.income_trend?.length){
+                    renderStockIncomeChart(data.income_trend);
+                }
+            });
+        }catch(e){
+            stockFinanceData.value=null;
+            stockFinanceHealth.value={score:0,level:'-',roe:0,gross:0,debt:0};
+        }finally{
+            stockFinanceLoading.value=false;
+        }
+    }
+    
+    // 计算财务健康评分
+    function calculateFinanceHealth(data){
+        const fina=data?.fina_indicator?.[0];
+        if(!fina){
+            stockFinanceHealth.value={score:0,level:'无数据',roe:0,gross:0,debt:0};
+            return;
+        }
+        
+        const roe=(fina.roe||0)*100;
+        const gross=(fina.grossprofit_margin||0)*100;
+        const net=(fina.netprofit_margin||0)*100;
+        const debt=(fina.debt_to_assets||0)*100;
+        
+        // 评分逻辑（满分100）
+        let score=0;
+        // ROE评分（0-30分）
+        score+=roe>=20?30:roe>=15?25:roe>=10?20:roe>=5?10:roe>0?5:0;
+        // 毛利率评分（0-25分）
+        score+=gross>=40?25:gross>=30?20:gross>=20?15:gross>=10?10:gross>0?5:0;
+        // 净利率评分（0-20分）
+        score+=net>=20?20:net>=15?15:net>=10?10:net>=5?5:net>0?2:0;
+        // 负债率评分（0-25分，越低越好）
+        score+=debt<=30?25:debt<=40?20:debt<=50?15:debt<=60?10:debt<=70?5:0;
+        
+        let level='';
+        if(score>=80)level='优秀';
+        else if(score>=60)level='良好';
+        else if(score>=40)level='一般';
+        else level='较差';
+        
+        stockFinanceHealth.value={
+            score:Math.round(score),
+            level,
+            roe:roe.toFixed(1),
+            gross:gross.toFixed(1),
+            debt:debt.toFixed(1)
+        };
+    }
+    
+    // 渲染营收趋势图
+    function renderStockIncomeChart(incomeData){
+        const el=document.getElementById('stockIncomeChart');
+        if(!el||!incomeData?.length)return;
+        if(window._stockIncomeChart)window._stockIncomeChart.dispose();
+        const chart=echarts.init(el);
+        window._stockIncomeChart=chart;
+        
+        const dates=incomeData.map(d=>d.end_date).reverse();
+        const revenues=incomeData.map(d=>d.total_revenue/100000000).reverse(); // 转为亿
+        const profits=incomeData.map(d=>d.net_profit/100000000).reverse();
+        
+        chart.setOption({
+            tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
+            legend:{data:['营业收入','净利润'],textStyle:{color:'var(--text-secondary)'},top:0},
+            grid:{left:'3%',right:'4%',bottom:'3%',containLabel:true},
+            xAxis:{type:'category',data:dates,axisLine:{lineStyle:{color:'var(--border)'}},axisLabel:{color:'var(--text-muted)'}},
+            yAxis:{type:'value',name:'亿元',axisLine:{lineStyle:{color:'var(--border)'}},axisLabel:{color:'var(--text-muted)'},splitLine:{lineStyle:{color:'var(--border)'}}},
+            series:[
+                {name:'营业收入',type:'bar',data:revenues,itemStyle:{color:'#3b82f6'}},
+                {name:'净利润',type:'line',data:profits,itemStyle:{color:'#ef4444'},smooth:true}
+            ]
+        });
+    }
+    
+    // 监听营收趋势tab切换
+    watch(stockFinanceSubTab,(newVal)=>{
+        if(newVal==='income'&&stockFinanceData.value?.income_trend?.length){
+            nextTick(()=>renderStockIncomeChart(stockFinanceData.value.income_trend));
+        }
+    });
+
     function renderMarketStockKline(kd){
         const el=document.getElementById('marketStockKline');
         if(!el||!kd||!kd.dates?.length)return;
@@ -1082,6 +1188,9 @@ setup(){
         stockDetailSubTab,stockFinanceData,stockFinanceLoading,
         chipsData,chipsLoading,loadChips,renderChipsChart,
         stockNorthboundData,stockNorthboundLoading,loadStockNorthbound,
+        // 个股财务详情弹窗
+        showStockFinanceModal,stockFinanceModalTitle,stockFinanceModalCode,stockFinanceSubTab,stockFinanceHealth,
+        openStockFinanceModal,calculateFinanceHealth,renderStockIncomeChart,
         formatAmount};
 }
 }).mount('#app');

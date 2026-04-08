@@ -118,7 +118,7 @@
                         <td style="text-align:right" class="num" :class="p.today_profit>=0?'text-red':'text-green'">{{p.today_profit>=0?'+':''}}{{formatNum(p.today_profit)}}</td>
                         <td style="text-align:right" class="num">¥{{formatNum(p.market_value)}}</td>
                         <td style="font-size:12px;color:var(--text-muted)"><div v-if="p.stop_loss">损 ¥{{p.stop_loss}}</div><div v-if="p.stop_profit">盈 ¥{{p.stop_profit}}</div><div v-if="!p.stop_loss&&!p.stop_profit">-</div></td>
-                        <td><div class="actions"><button class="btn btn-xs" @click="openAdviceModal(p)" title="策略建议" style="font-size:13px">🧠</button><button class="btn btn-xs" @click="openSellModal(p)" title="卖出">💰</button><button class="btn btn-xs" @click="openTradeModal(p)" title="追加买入">＋</button><button class="btn btn-xs" @click="openAlertModal(p)" title="止损止盈">🔔</button><button class="btn btn-xs" @click="openDetailModal(p)" title="交易记录">📋</button><button class="btn btn-xs btn-danger" @click="confirmDelete(p)" title="删除">✕</button></div></td>
+                        <td><div class="actions"><button class="btn btn-xs" @click="openAdviceModal(p)" title="策略建议" style="font-size:13px">🧠</button><button class="btn btn-xs" @click="openStockFinanceModal(p.ts_code,p.name)" title="财务详情" style="font-size:13px;background:rgba(16,185,129,0.2);color:#34d399">📊</button><button class="btn btn-xs" @click="openSellModal(p)" title="卖出">💰</button><button class="btn btn-xs" @click="openTradeModal(p)" title="追加买入">＋</button><button class="btn btn-xs" @click="openAlertModal(p)" title="止损止盈">🔔</button><button class="btn btn-xs" @click="openDetailModal(p)" title="交易记录">📋</button><button class="btn btn-xs btn-danger" @click="confirmDelete(p)" title="删除">✕</button></div></td>
                     </tr>
                 </tbody>
             </table>
@@ -1010,6 +1010,7 @@
                     <td>
                         <div class="actions">
                             <button class="btn btn-xs" @click="openWatchStrategyModal(w)" title="选股策略建议" style="font-size:13px;background:rgba(59,130,246,0.2);color:#60a5fa">📋</button>
+                            <button class="btn btn-xs" @click="openStockFinanceModal(w.ts_code,w.name)" title="财务详情" style="font-size:13px;background:rgba(16,185,129,0.2);color:#34d399">📊</button>
                             <button class="btn btn-xs" @click="openKlineModalForWatch(w)" title="K线图" style="font-size:13px">📈</button>
                             <button class="btn btn-xs" @click="openWatchNoteModal(w)" title="备注">📝</button>
                             <button class="btn btn-xs" @click="quickBuyFromWatch(w)" title="买入" style="color:var(--blue)">💰</button>
@@ -1676,6 +1677,115 @@
     </div>
     <div class="auth-footer" v-else style="margin-top:14px;font-size:12px;color:var(--text-muted);text-align:center">
         已有账号？<a href="#" @click.prevent="authMode='login';authError=''" style="color:var(--blue);text-decoration:none">去登录</a>
+    </div>
+</div>
+</div>
+
+<!-- Stock Finance Detail Modal -->
+<div class="modal-overlay" v-if="showStockFinanceModal" @click.self="showStockFinanceModal=false">
+<div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h2 style="margin:0">📊 {{stockFinanceModalTitle}} 财务详情</h2>
+        <button class="btn btn-sm" @click="showStockFinanceModal=false">✕</button>
+    </div>
+    
+    <!-- 财务健康评分 -->
+    <div v-if="stockFinanceData" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
+        <div class="chart-card" style="text-align:center;padding:16px">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">财务健康评分</div>
+            <div style="font-size:32px;font-weight:800" :style="{color:stockFinanceHealth.score>=80?'var(--red)':stockFinanceHealth.score>=60?'var(--yellow)':'var(--green)'}">{{stockFinanceHealth.score}}</div>
+            <div style="font-size:12px;color:var(--text-muted)">{{stockFinanceHealth.level}}</div>
+        </div>
+        <div class="chart-card" style="text-align:center;padding:16px">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">最新ROE</div>
+            <div style="font-size:28px;font-weight:700" :class="stockFinanceHealth.roe>=15?'text-red':stockFinanceHealth.roe>=10?'text-yellow':'text-green'">{{stockFinanceHealth.roe}}%</div>
+            <div style="font-size:11px;color:var(--text-muted)">净资产收益率</div>
+        </div>
+        <div class="chart-card" style="text-align:center;padding:16px">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">毛利率</div>
+            <div style="font-size:28px;font-weight:700" :class="stockFinanceHealth.gross>=30?'text-red':stockFinanceHealth.gross>=20?'text-yellow':'text-green'">{{stockFinanceHealth.gross}}%</div>
+            <div style="font-size:11px;color:var(--text-muted)">盈利能力</div>
+        </div>
+        <div class="chart-card" style="text-align:center;padding:16px">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">负债率</div>
+            <div style="font-size:28px;font-weight:700" :class="stockFinanceHealth.debt<=40?'text-red':stockFinanceHealth.debt<=60?'text-yellow':'text-green'">{{stockFinanceHealth.debt}}%</div>
+            <div style="font-size:11px;color:var(--text-muted)">财务安全</div>
+        </div>
+    </div>
+    
+    <!-- 子标签切换 -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:12px">
+        <button :class="['btn','btn-sm',stockFinanceSubTab==='indicator'?'btn-primary':'']" @click="stockFinanceSubTab='indicator'">📈 财务指标</button>
+        <button :class="['btn','btn-sm',stockFinanceSubTab==='income'?'btn-primary':'']" @click="stockFinanceSubTab='income'">💰 营收趋势</button>
+        <button :class="['btn','btn-sm',stockFinanceSubTab==='forecast'?'btn-primary':'']" @click="stockFinanceSubTab='forecast'">🔮 业绩预告</button>
+        <button :class="['btn','btn-sm',stockFinanceSubTab==='repurchase'?'btn-primary':'']" @click="stockFinanceSubTab='repurchase'">🔄 回购记录</button>
+    </div>
+    
+    <!-- 财务指标表格 -->
+    <div v-if="stockFinanceSubTab==='indicator'" class="chart-card" style="padding:12px">
+        <div v-if="stockFinanceLoading" style="text-align:center;padding:20px;color:var(--text-muted)">⏳ 加载中...</div>
+        <table v-else-if="stockFinanceData?.fina_indicator?.length" class="data-table" style="width:100%;font-size:12px">
+            <thead><tr><th>报告期</th><th>ROE</th><th>毛利率</th><th>净利率</th><th>负债率</th><th>EPS</th><th>营收同比</th><th>净利同比</th></tr></thead>
+            <tbody>
+                <tr v-for="f in stockFinanceData.fina_indicator" :key="f.end_date">
+                    <td>{{f.end_date}}</td>
+                    <td class="num" :class="f.roe>=0.15?'text-red':f.roe>=0.10?'text-yellow':'">{{f.roe!=null?(f.roe*100).toFixed(1)+'%':'-'}}</td>
+                    <td class="num">{{f.grossprofit_margin!=null?(f.grossprofit_margin*100).toFixed(1)+'%':'-'}}</td>
+                    <td class="num">{{f.netprofit_margin!=null?(f.netprofit_margin*100).toFixed(1)+'%':'-'}}</td>
+                    <td class="num" :class="f.debt_to_assets<=0.4?'text-red':f.debt_to_assets<=0.6?'text-yellow':'text-green'">{{f.debt_to_assets!=null?(f.debt_to_assets*100).toFixed(1)+'%':'-'}}</td>
+                    <td class="num">{{f.eps!=null?f.eps.toFixed(2):'-'}}</td>
+                    <td class="num" :class="f.or_yoy>=0?'text-red':'text-green'">{{f.or_yoy!=null?(f.or_yoy*100).toFixed(1)+'%':'-'}}</td>
+                    <td class="num" :class="f.netprofit_yoy>=0?'text-red':'text-green'">{{f.netprofit_yoy!=null?(f.netprofit_yoy*100).toFixed(1)+'%':'-'}}</td>
+                </tr>
+            </tbody>
+        </table>
+        <div v-else style="text-align:center;padding:20px;color:var(--text-muted)">暂无财务数据</div>
+    </div>
+    
+    <!-- 营收趋势图 -->
+    <div v-if="stockFinanceSubTab==='income'" class="chart-card" style="padding:12px">
+        <div v-if="stockFinanceLoading" style="text-align:center;padding:20px;color:var(--text-muted)">⏳ 加载中...</div>
+        <div v-else-if="stockFinanceData?.income_trend?.length" id="stockIncomeChart" style="height:320px"></div>
+        <div v-else style="text-align:center;padding:20px;color:var(--text-muted)">暂无营收数据</div>
+    </div>
+    
+    <!-- 业绩预告 -->
+    <div v-if="stockFinanceSubTab==='forecast'" class="chart-card" style="padding:12px">
+        <div v-if="stockFinanceLoading" style="text-align:center;padding:20px;color:var(--text-muted)">⏳ 加载中...</div>
+        <table v-else-if="stockFinanceData?.forecast?.length" class="data-table" style="width:100%;font-size:12px">
+            <thead><tr><th>公告日</th><th>报告期</th><th>类型</th><th>净利润下限</th><th>净利润上限</th><th>变动幅度</th><th>摘要</th></tr></thead>
+            <tbody>
+                <tr v-for="f in stockFinanceData.forecast" :key="f.ann_date">
+                    <td>{{f.ann_date}}</td>
+                    <td>{{f.end_date}}</td>
+                    <td><span :style="{color: f.type==='预增'||f.type==='扭亏'?'var(--red)': f.type==='预减'||f.type==='首亏'?'var(--green)':'var(--yellow)'}">{{f.type}}</span></td>
+                    <td class="num">{{f.net_profit_min?formatAmount(f.net_profit_min):'-'}}</td>
+                    <td class="num">{{f.net_profit_max?formatAmount(f.net_profit_max):'-'}}</td>
+                    <td class="num" :class="f.change>=0?'text-red':'text-green'">{{f.change!=null?(f.change>=0?'+':'')+f.change.toFixed(1)+'%':'-'}}</td>
+                    <td style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{{f.summary||'-'}}</td>
+                </tr>
+            </tbody>
+        </table>
+        <div v-else style="text-align:center;padding:20px;color:var(--text-muted)">暂无业绩预告</div>
+    </div>
+    
+    <!-- 回购记录 -->
+    <div v-if="stockFinanceSubTab==='repurchase'" class="chart-card" style="padding:12px">
+        <div v-if="stockFinanceLoading" style="text-align:center;padding:20px;color:var(--text-muted)">⏳ 加载中...</div>
+        <table v-else-if="stockFinanceData?.repurchase?.length" class="data-table" style="width:100%;font-size:12px">
+            <thead><tr><th>公告日</th><th>提议人</th><th>回购金额</th><th>价格区间</th><th>回购目的</th><th>状态</th></tr></thead>
+            <tbody>
+                <tr v-for="r in stockFinanceData.repurchase" :key="r.ann_date">
+                    <td>{{r.ann_date}}</td>
+                    <td>{{r.proposer||'-'}}</td>
+                    <td class="num">{{r.amount?formatAmount(r.amount):'-'}}</td>
+                    <td class="num">{{r.low_price&&r.high_price?'¥'+r.low_price+'~'+r.high_price:'-'}}</td>
+                    <td style="font-size:11px">{{r.purpose||'-'}}</td>
+                    <td>{{r.status||'-'}}</td>
+                </tr>
+            </tbody>
+        </table>
+        <div v-else style="text-align:center;padding:20px;color:var(--text-muted)">暂无回购记录</div>
     </div>
 </div>
 </div>
