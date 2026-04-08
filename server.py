@@ -84,5 +84,9 @@ if __name__ == "__main__":
     stock_list = load_stock_list()
     print(f"[INFO] 已加载 {len(stock_list)} 只股票")
     print(f"[INFO] 数据目录: {os.path.abspath(DATA_DIR)}")
-    print(f"[INFO] 访问 http://{HOST}:{PORT}")
-    app.run(host=HOST, port=PORT, debug=DEBUG)
+    
+    # Railway 环境支持：从环境变量读取 PORT 和 HOST
+    port = int(os.environ.get("PORT", PORT))
+    host = os.environ.get("HOST", HOST)
+    print(f"[INFO] 访问 http://{host}:{port}")
+    app.run(host=host, port=port, debug=DEBUG)
