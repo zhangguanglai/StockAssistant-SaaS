@@ -1,4 +1,5 @@
 flask>=3.0
 flask-cors>=4.0
+flask-compress>=1.13
 tushare>=1.4
 requests>=2.28
