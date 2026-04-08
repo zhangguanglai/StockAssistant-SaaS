@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "created_at": "2026-04-04",
+  "updated_at": "2026-04-05T10:16:27.874216",
+  "positions": [
+    {
+      "id": "899e8451-101d-4a11-836c-ed20a7128999",
+      "ts_code": "688566.SH",
+      "name": "吉贝尔",
+      "industry": "化学制药",
+      "trades": [
+        {
+          "trade_id": "a04ca06c-a083-4d13-ba3f-4421b9c4c4c1",
+          "trade_type": "buy",
+          "buy_date": "2026-04-02",
+          "buy_price": 32.485,
+          "buy_volume": 1900,
+          "fee": 0.0,
+          "note": "首次建仓400股（刚起步），二次加仓400股，三次加仓800股（追高）",
+          "reason": "放量上涨，同花顺选股公式筛选",
+          "emotion": "fomo"
+        }
+      ],
+      "meta": {
+        "avg_cost": 31.45,
+        "total_volume": 1600,
+        "total_cost": 50320.0,
+        "sell_volume": 0
+      },
+      "stop_loss": 30.0,
+      "stop_profit": 35.0
+    }
+  ],
+  "settings": {
+    "refresh_interval": 10,
+    "theme": "dark"
+  },
+  "capital": {
+    "initial": 0.0,
+    "cash": 100000.0
+  }
+}

@@ -1,0 +1,98 @@
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+ * Serving Flask app 'server'
+ * Debug mode: on
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000
+[WARNING] TUSHARE_TOKEN 使用硬编码值，生产环境请设置环境变量 TUSHARE_TOKEN
+[WARNING] SECRET_KEY 使用默认值，生产环境请设置环境变量 SECRET_KEY
+[MIGRATE] 选股历史已迁移 7 条记录从 JSON 到 SQLite
+[MIGRATE] 数据库已有数据，跳过迁移
+[INFO] 正在加载股票列表...
+[INFO] 已加载 5497 只股票
+[INFO] 数据目录: C:\Users\13826\WorkBuddy\Claw\stock-portfolio\data
+[INFO] 访问 http://127.0.0.1:5000

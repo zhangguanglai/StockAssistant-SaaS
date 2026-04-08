@@ -1,0 +1,313 @@
+[
+  {
+    "date": "2026-04-06",
+    "time": "10:02",
+    "strategy": "oversold_bounce",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 20,
+    "top5": [
+      {
+        "ts_code": "002364.SZ",
+        "name": "中恒电气",
+        "price": 27.26,
+        "pct_chg": 6.32,
+        "total_score": 80
+      },
+      {
+        "ts_code": "603067.SH",
+        "name": "振华股份",
+        "price": 34.68,
+        "pct_chg": 9.99,
+        "total_score": 80
+      },
+      {
+        "ts_code": "600759.SH",
+        "name": "洲际油气",
+        "price": 5.71,
+        "pct_chg": -3.06,
+        "total_score": 70
+      },
+      {
+        "ts_code": "603057.SH",
+        "name": "紫燕食品",
+        "price": 25.65,
+        "pct_chg": -4.75,
+        "total_score": 70
+      },
+      {
+        "ts_code": "600871.SH",
+        "name": "石化油服",
+        "price": 2.87,
+        "pct_chg": -2.71,
+        "total_score": 65
+      }
+    ],
+    "stats": {
+      "total_stocks": 1677,
+      "after_basic": 154,
+      "after_trend": 154,
+      "after_sector": 24,
+      "final_count": 24,
+      "message": "超跌反弹策略：共24只符合条件",
+      "data_warnings": []
+    },
+    "run_time": 49.0
+  },
+  {
+    "date": "2026-04-06",
+    "time": "13:46",
+    "strategy": "oversold_bounce",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 20,
+    "top5": [
+      {
+        "ts_code": "002364.SZ",
+        "name": "中恒电气",
+        "price": 27.26,
+        "pct_chg": 6.32,
+        "total_score": 80
+      },
+      {
+        "ts_code": "603067.SH",
+        "name": "振华股份",
+        "price": 34.68,
+        "pct_chg": 9.99,
+        "total_score": 80
+      },
+      {
+        "ts_code": "600759.SH",
+        "name": "洲际油气",
+        "price": 5.71,
+        "pct_chg": -3.06,
+        "total_score": 70
+      },
+      {
+        "ts_code": "603057.SH",
+        "name": "紫燕食品",
+        "price": 25.65,
+        "pct_chg": -4.75,
+        "total_score": 70
+      },
+      {
+        "ts_code": "600871.SH",
+        "name": "石化油服",
+        "price": 2.87,
+        "pct_chg": -2.71,
+        "total_score": 65
+      }
+    ],
+    "stats": {
+      "total_stocks": 1677,
+      "after_basic": 154,
+      "after_trend": 154,
+      "after_sector": 24,
+      "final_count": 24,
+      "message": "超跌反弹策略：共24只符合条件",
+      "data_warnings": []
+    },
+    "run_time": 48.9
+  },
+  {
+    "date": "2026-04-06",
+    "time": "13:50",
+    "strategy": "sector_leader",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 0,
+    "top5": [],
+    "stats": {
+      "total_stocks": 0,
+      "after_basic": 0,
+      "after_trend": 0,
+      "after_sector": 0,
+      "final_count": 0,
+      "message": "无热门板块中有涨幅5-9.5%的股票，今日无龙头标的"
+    },
+    "run_time": 17.3
+  },
+  {
+    "date": "2026-04-06",
+    "time": "13:50",
+    "strategy": "trend_break",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 0,
+    "top5": [],
+    "stats": {
+      "total_stocks": 5497,
+      "after_basic": 0,
+      "after_trend": 0,
+      "after_sector": 0,
+      "final_count": 0,
+      "message": "大盘处于下降趋势，建议观望，暂停选股"
+    },
+    "run_time": 0.5
+  },
+  {
+    "date": "2026-04-06",
+    "time": "13:51",
+    "strategy": "oversold_bounce",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 20,
+    "top5": [
+      {
+        "ts_code": "002364.SZ",
+        "name": "中恒电气",
+        "price": 27.26,
+        "pct_chg": 6.32,
+        "total_score": 80
+      },
+      {
+        "ts_code": "603067.SH",
+        "name": "振华股份",
+        "price": 34.68,
+        "pct_chg": 9.99,
+        "total_score": 80
+      },
+      {
+        "ts_code": "600759.SH",
+        "name": "洲际油气",
+        "price": 5.71,
+        "pct_chg": -3.06,
+        "total_score": 70
+      },
+      {
+        "ts_code": "603057.SH",
+        "name": "紫燕食品",
+        "price": 25.65,
+        "pct_chg": -4.75,
+        "total_score": 70
+      },
+      {
+        "ts_code": "600871.SH",
+        "name": "石化油服",
+        "price": 2.87,
+        "pct_chg": -2.71,
+        "total_score": 65
+      }
+    ],
+    "stats": {
+      "total_stocks": 1677,
+      "after_basic": 154,
+      "after_trend": 154,
+      "after_sector": 24,
+      "final_count": 24,
+      "message": "超跌反弹策略：共24只符合条件",
+      "data_warnings": []
+    },
+    "run_time": 36.5
+  },
+  {
+    "date": "2026-04-06",
+    "time": "14:42",
+    "strategy": "oversold_bounce",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 20,
+    "top5": [
+      {
+        "ts_code": "002364.SZ",
+        "name": "中恒电气",
+        "price": 27.26,
+        "pct_chg": 6.32,
+        "total_score": 80
+      },
+      {
+        "ts_code": "603067.SH",
+        "name": "振华股份",
+        "price": 34.68,
+        "pct_chg": 9.99,
+        "total_score": 80
+      },
+      {
+        "ts_code": "600759.SH",
+        "name": "洲际油气",
+        "price": 5.71,
+        "pct_chg": -3.06,
+        "total_score": 70
+      },
+      {
+        "ts_code": "603057.SH",
+        "name": "紫燕食品",
+        "price": 25.65,
+        "pct_chg": -4.75,
+        "total_score": 70
+      },
+      {
+        "ts_code": "600871.SH",
+        "name": "石化油服",
+        "price": 2.87,
+        "pct_chg": -2.71,
+        "total_score": 65
+      }
+    ],
+    "stats": {
+      "total_stocks": 1677,
+      "after_basic": 154,
+      "after_trend": 154,
+      "after_sector": 24,
+      "final_count": 24,
+      "message": "超跌反弹策略：共24只符合条件",
+      "data_warnings": []
+    },
+    "run_time": 26.6
+  },
+  {
+    "date": "2026-04-06",
+    "time": "14:43",
+    "strategy": "oversold_bounce",
+    "market_status": "下降",
+    "market_desc": "大盘下降，MA20=3986.56，斜率=-0.0071",
+    "result_count": 20,
+    "top5": [
+      {
+        "ts_code": "002364.SZ",
+        "name": "中恒电气",
+        "price": 27.26,
+        "pct_chg": 6.32,
+        "total_score": 80
+      },
+      {
+        "ts_code": "603067.SH",
+        "name": "振华股份",
+        "price": 34.68,
+        "pct_chg": 9.99,
+        "total_score": 80
+      },
+      {
+        "ts_code": "600759.SH",
+        "name": "洲际油气",
+        "price": 5.71,
+        "pct_chg": -3.06,
+        "total_score": 70
+      },
+      {
+        "ts_code": "603057.SH",
+        "name": "紫燕食品",
+        "price": 25.65,
+        "pct_chg": -4.75,
+        "total_score": 70
+      },
+      {
+        "ts_code": "600871.SH",
+        "name": "石化油服",
+        "price": 2.87,
+        "pct_chg": -2.71,
+        "total_score": 65
+      }
+    ],
+    "stats": {
+      "total_stocks": 1677,
+      "after_basic": 154,
+      "after_trend": 154,
+      "after_sector": 24,
+      "final_count": 24,
+      "message": "超跌反弹策略：共24只符合条件",
+      "data_warnings": []
+    },
+    "run_time": 18.3
+  }
+]
