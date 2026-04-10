@@ -559,7 +559,10 @@ setup(){
         try{
             const r=await fetchWithAuth(`${API}/api/screen/strategies`);const d=await r.json();
             if(d.strategies){
-                strategyList.value=d.strategies;
+                // [UI-03 修复] 合并而非覆盖：保留默认值，用 API 数据补充/更新，防止模板在加载前访问 undefined
+                Object.keys(d.strategies).forEach(key=>{
+                    strategyList.value[key]=Object.assign({},strategyList.value[key]||{},d.strategies[key]);
+                });
                 // 根据大盘环境自动设置推荐策略
                 if(d.recommended&&d.reason){
                     currentStrategy.value=d.recommended;
