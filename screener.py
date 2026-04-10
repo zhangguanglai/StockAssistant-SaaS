@@ -1058,22 +1058,136 @@ def basic_filter(stock_list, daily_cache, basic_cache, batch_basic_df=None, batc
 
 
 # ============================================================
+# 三看检查工具函数
+# ============================================================
+
+def check_three_views(records):
+    """
+    检查股票的"三看"条件
+    返回: (是否全部通过, 详细结果字典)
+    """
+    if len(records) < 20:
+        return False, {"error": "数据不足"}
+    
+    closes = [float(r["close"]) for r in records]
+    highs = [float(r["high"]) for r in records]
+    lows = [float(r["low"]) for r in records]
+    volumes = [float(r["vol"]) for r in records]
+    
+    result = {"all_passed": False, "details": {}}
+    
+    # ========== 一看：高低点抬高 ==========
+    # 找最近5个波段的低点和高点（使用3日窗口确认极值，更稳健）
+    local_lows = []
+    local_highs = []
+    window = 2  # 前后各2天，共5日窗口
+    for i in range(window, len(records) - window):
+        # 低点：比前后window天都低
+        is_low = all(lows[i] < lows[i-j] for j in range(1, window+1)) and \
+                 all(lows[i] < lows[i+j] for j in range(1, window+1))
+        if is_low:
+            local_lows.append((i, lows[i]))
+        # 高点：比前后window天都高
+        is_high = all(highs[i] > highs[i-j] for j in range(1, window+1)) and \
+                  all(highs[i] > highs[i+j] for j in range(1, window+1))
+        if is_high:
+            local_highs.append((i, highs[i]))
+    
+    # 取最近3个
+    recent_lows = local_lows[-3:] if len(local_lows) >= 3 else local_lows
+    recent_highs = local_highs[-3:] if len(local_highs) >= 3 else local_highs
+    
+    low_increasing = len(recent_lows) >= 2 and all(
+        recent_lows[i][1] > recent_lows[i-1][1] for i in range(1, len(recent_lows))
+    )
+    high_increasing = len(recent_highs) >= 2 and all(
+        recent_highs[i][1] > recent_highs[i-1][1] for i in range(1, len(recent_highs))
+    )
+    
+    result["details"]["high_low"] = {
+        "passed": bool(low_increasing and high_increasing),
+        "low_increasing": bool(low_increasing),
+        "high_increasing": bool(high_increasing),
+        "recent_lows": [round(x[1], 2) for x in recent_lows],
+        "recent_highs": [round(x[1], 2) for x in recent_highs],
+    }
+    
+    # ========== 二看：均线多头排列 ==========
+    ma5 = calc_ma(closes, 5)
+    ma10 = calc_ma(closes, 10)
+    ma20 = calc_ma(closes, 20)
+    
+    ma_bull = ma5 and ma10 and ma20 and ma5 > ma10 > ma20
+    
+    result["details"]["ma"] = {
+        "passed": bool(ma_bull),
+        "ma5": round(ma5, 2) if ma5 else None,
+        "ma10": round(ma10, 2) if ma10 else None,
+        "ma20": round(ma20, 2) if ma20 else None,
+    }
+    
+    # ========== 三看：量价配合 ==========
+    today_vol = volumes[-1]
+    vol_ma5 = calc_ma(volumes, 5)
+    vol_ratio = today_vol / vol_ma5 if vol_ma5 and vol_ma5 > 0 else 1.0
+    
+    # 上涨日 vs 下跌日成交量（近10个交易日）
+    up_vol_sum = 0
+    down_vol_sum = 0
+    up_count = 0
+    down_count = 0
+    for i in range(max(0, len(records)-10), len(records)):
+        if closes[i] > float(records[i]["open"]):
+            up_vol_sum += volumes[i]
+            up_count += 1
+        elif closes[i] < float(records[i]["open"]):
+            down_vol_sum += volumes[i]
+            down_count += 1
+    
+    up_vol_avg = up_vol_sum / up_count if up_count > 0 else 0
+    down_vol_avg = down_vol_sum / down_count if down_count > 0 else 0
+    
+    vol_ok = vol_ratio > 1.0 and up_vol_avg > down_vol_avg
+    
+    result["details"]["volume"] = {
+        "passed": bool(vol_ok),
+        "vol_ratio": round(vol_ratio, 2),
+        "up_vol_avg": round(up_vol_avg, 0) if up_vol_avg else 0,
+        "down_vol_avg": round(down_vol_avg, 0) if down_vol_avg else 0,
+    }
+    
+    # 综合判断
+    result["all_passed"] = (
+        result["details"]["high_low"]["passed"] and
+        result["details"]["ma"]["passed"] and
+        result["details"]["volume"]["passed"]
+    )
+    
+    return result["all_passed"], result
+
+
+# ============================================================
 # 第3步：趋势确认
 # ============================================================
 
 def trend_confirm(candidates, filter_params=None):
     """
-    趋势确认：MA20站稳 + MA20向上
-    :param filter_params: {"ma20_deviation_min": 1}
+    趋势确认：MA20站稳 + MA20向上 + MACD金叉 + 放量 + 高低点结构
+    :param filter_params: {"ma20_deviation_min": 1, "min_vol_ratio": 1.5, "min_price_change": 2}
     返回: 通过的候选股
     """
     fp = filter_params or {}
     p_ma20_dev_min = fp.get("ma20_deviation_min", 1)
+    p_min_vol_ratio = fp.get("min_vol_ratio", 1.5)
+    p_min_price_change = fp.get("min_price_change", 2)
 
     passed = []
     for c in candidates:
         records = c["records"]
         closes = [float(r["close"]) for r in records]
+        highs = [float(r["high"]) for r in records]
+        lows = [float(r["low"]) for r in records]
+        volumes = [float(r["vol"]) for r in records]
 
         # MA20计算
         ma20_values = calc_ma_series(closes, 20)
@@ -1083,6 +1197,8 @@ def trend_confirm(candidates, filter_params=None):
 
         # 条件1：收盘价 > MA20 * (1 + deviation_min%)
         last_close = closes[-1]
+        last_open = float(records[-1]["open"])
+        prev_close = closes[-2] if len(closes) >= 2 else last_open
         current_ma20 = recent_ma20[-1]
         if last_close < current_ma20 * (1 + p_ma20_dev_min / 100):
             continue
@@ -1092,29 +1208,139 @@ def trend_confirm(candidates, filter_params=None):
         if not ma20_up:
             continue
 
+        # 条件3：MACD金叉（强制）
+        macd = calc_macd(closes)
+        macd_valid = False
+        if macd and len(macd["dif"]) >= 2:
+            dif_now = macd["dif"][-1]
+            dif_prev = macd["dif"][-2]
+            dea_now = macd["dea"][-1]
+            dea_prev = macd["dea"][-2]
+            macd_now = macd["macd"][-1]
+            macd_prev = macd["macd"][-2]
+            
+            # 金叉判断：DIF从下方穿越DEA，或MACD柱由负转正
+            is_cross = (dif_prev <= dea_prev) and (dif_now > dea_now)
+            is_hist_cross = (macd_prev <= 0) and (macd_now > 0)
+            
+            if is_cross or is_hist_cross:
+                macd_valid = True
+        
+        if not macd_valid:
+            continue
+
+        # 条件4：放量确认（量比 >= 阈值）
+        vol_ma5 = calc_ma(volumes, 5)
+        if vol_ma5 and vol_ma5 > 0:
+            vol_ratio = volumes[-1] / vol_ma5
+            if vol_ratio < p_min_vol_ratio:
+                continue
+        else:
+            continue
+
+        # 条件5：涨幅确认（当日涨幅 >= 阈值）
+        price_change_pct = (last_close - prev_close) / prev_close * 100
+        if price_change_pct < p_min_price_change:
+            continue
+
+        # 条件6：三看检查（强制）
+        three_views_passed, three_views_result = check_three_views(records)
+        if not three_views_passed:
+            continue
+        
+        # 保存三看详情用于展示
+        c["three_views"] = three_views_result["details"]
+
         # 计算趋势强度评分
         ma20_slope = calc_slope(recent_ma20, 3)
         deviation = (last_close - current_ma20) / current_ma20 * 100  # 偏离度
 
         c["trend_score"] = 0
-        # MA20偏离度评分（0-10分）
+        # MA20偏离度评分（0-8分，原10分降为8分，腾出2分给HL结构）
         if deviation > 5:
-            c["trend_score"] += 5  # 偏离太多可能追高
+            c["trend_score"] += 4  # 偏离太多可能追高
         elif deviation > 2:
-            c["trend_score"] += 8
+            c["trend_score"] += 6
         else:
-            c["trend_score"] += 10  # 刚站上，最佳买点
+            c["trend_score"] += 8  # 刚站上，最佳买点
 
-        # MA20斜率评分（0-15分）
+        # MA20斜率评分（0-12分，原15分降为12分，腾出3分给HL结构）
         if ma20_slope > 0.005:
-            c["trend_score"] += 15
-        elif ma20_slope > 0.002:
             c["trend_score"] += 12
+        elif ma20_slope > 0.002:
+            c["trend_score"] += 10
         elif ma20_slope > 0:
-            c["trend_score"] += 8
+            c["trend_score"] += 6
         else:
-            c["trend_score"] += 3
+            c["trend_score"] += 2
 
+        # 【新增】高低点结构评分（0-10分）
+        c["hl_score"] = 0
+        c["hl_structure"] = "unknown"
+        try:
+            # 构建DataFrame用于高低点分析
+            import pandas as pd
+            df = pd.DataFrame({
+                'high': highs,
+                'low': lows,
+                'close': closes,
+            })
+            
+            # 使用左右5根K线法识别局部极值
+            n = 5
+            local_highs = []
+            local_lows = []
+            
+            for i in range(n, len(df) - n):
+                current_high = df.iloc[i]['high']
+                current_low = df.iloc[i]['low']
+                left_highs = df.iloc[i-n:i]['high'].values
+                left_lows = df.iloc[i-n:i]['low'].values
+                right_highs = df.iloc[i+1:i+n+1]['high'].values
+                right_lows = df.iloc[i+1:i+n+1]['low'].values
+                
+                if current_high > max(left_highs) and current_high > max(right_highs):
+                    local_highs.append((i, current_high))
+                if current_low < min(left_lows) and current_low < min(right_lows):
+                    local_lows.append((i, current_low))
+            
+            # 分析高低点结构
+            if len(local_highs) >= 3 and len(local_lows) >= 3:
+                recent_highs = local_highs[-3:]
+                recent_lows = local_lows[-3:]
+                
+                # 统计HH/HL/LH/LL
+                hh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] > recent_highs[i-1][1])
+                hl = sum(1 for i in range(1, recent_lows)) if len(recent_lows) > 1 else 0
+                hl = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] > recent_lows[i-1][1])
+                lh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] < recent_highs[i-1][1])
+                ll = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] < recent_lows[i-1][1])
+                
+                # 评分
+                if hh >= 2 and hl >= 2:
+                    c["hl_score"] = 10  # 标准上升结构
+                    c["hl_structure"] = "uptrend"
+                elif hh >= 1 and hl >= 2:
+                    c["hl_score"] = 6   # 低点抬高，高点待确认
+                    c["hl_structure"] = "uptrend_weak"
+                elif hh >= 2 and hl >= 1:
+                    c["hl_score"] = 4   # 高点突破，低点待确认
+                    c["hl_structure"] = "uptrend_uncertain"
+                elif lh >= 2 and ll >= 2:
+                    c["hl_score"] = -5  # 下降趋势，扣分
+                    c["hl_structure"] = "downtrend"
+                else:
+                    c["hl_score"] = 2   # 震荡
+                    c["hl_structure"] = "sideways"
+            else:
+                c["hl_score"] = 3  # 数据不足，给基础分
+                c["hl_structure"] = "insufficient_data"
+                
+        except Exception as e:
+            c["hl_score"] = 3
+            c["hl_structure"] = "error"
+
+        c["trend_score"] += c["hl_score"]
         c["ma20"] = round(current_ma20, 2)
         c["ma20_slope"] = round(ma20_slope, 4)
         c["deviation"] = round(deviation, 2)
@@ -1504,6 +1730,8 @@ def run_screener(top_n=20, silent=False, force=False, params=None):
     max_circ_mv = _parse_params(params, "max_circ_mv", 300)
     min_turnover = _parse_params(params, "min_turnover", 3)
     ma20_deviation_min = _parse_params(params, "ma20_deviation_min", 1)
+    min_vol_ratio = _parse_params(params, "min_vol_ratio", 1.5)
+    min_price_change = _parse_params(params, "min_price_change", 2)
     board_threshold = _parse_params(params, "board_threshold", 0.5)
     min_inflow_days = _parse_params(params, "min_inflow_days", 2)
 
@@ -1624,6 +1852,8 @@ def run_screener(top_n=20, silent=False, force=False, params=None):
         "max_circ_mv": max_circ_mv,
         "min_turnover": min_turnover,
         "ma20_deviation_min": ma20_deviation_min,
+        "min_vol_ratio": min_vol_ratio,
+        "min_price_change": min_price_change,
         "board_threshold": board_threshold,
         "min_inflow_days": min_inflow_days,
     }
@@ -1653,7 +1883,7 @@ def run_screener(top_n=20, silent=False, force=False, params=None):
 
     # 第3步：趋势确认
     if not silent:
-        print(f"\n[第3步] 趋势确认（MA20站稳+MA20向上+换手率）...")
+        print(f"\n[第3步] 趋势确认（MA20站稳+MA20向上+MACD金叉+放量+涨幅）...")
     after_trend = trend_confirm(after_basic, filter_params=filter_params)
     if not silent:
         print(f"  → 通过 {len(after_trend)} 只")
@@ -1781,8 +2011,8 @@ STRATEGY_META = {
         "suitable": "大盘上升/震荡期",
         "hold_period": "3-10个交易日",
         "stop_loss": "跌破MA20 或 亏损8%",
-        "buy_tip": "回调至MA20附近缩量企稳后买入，不追高",
-        "description": "核心策略：MA20站稳+MACD金叉+放量确认+板块效应",
+        "buy_tip": "",
+        "description": "买入信号：MA20站稳+MACD金叉+放量确认+三看通过（高低点抬高/均线多头/量价配合）+板块效应；持股周期：3-10个交易日；止损位：跌破MA20或亏损8%",
     },
     "sector_leader": {
         "name": "板块龙头首板策略",
@@ -1790,8 +2020,8 @@ STRATEGY_META = {
         "suitable": "情绪亢奋期（涨停家数>50）",
         "hold_period": "1-5个交易日",
         "stop_loss": "次日跌破分时均线 或 亏损5%",
-        "buy_tip": "板块启动确认后，龙头回踩分时均线时买入",
-        "description": "捕捉板块爆发龙头：板块涨>2%+涨幅5-9.5%+换手充分+资金流入",
+        "buy_tip": "",
+        "description": "买入信号：板块涨>2%+个股涨幅5-9.5%+换手5-15%+资金流入；加分项：三看确认+10分；持股周期：1-5个交易日；止损位：次日跌破分时均线或亏损5%",
     },
     "oversold_bounce": {
         "name": "超跌反弹策略",
@@ -1799,8 +2029,8 @@ STRATEGY_META = {
         "suitable": "大盘下跌末期",
         "hold_period": "5-20个交易日",
         "stop_loss": "跌破近期新低 或 亏损10%",
-        "buy_tip": "技术面改善信号出现时（MA金叉+放量+阳线）买入",
-        "description": "超跌反弹：近20日跌幅>阈值 + 止跌信号 + 技术面改善（MA5上穿MA20/量比放大/阳线）",
+        "buy_tip": "",
+        "description": "买入信号：近20日跌幅>阈值 + 止跌信号（长下影线/放量/MACD金叉）+ 技术改善（MA金叉/阳线/放量）；持股周期：5-20个交易日；止损位：跌破近期新低或亏损10%",
     },
 }
 
@@ -1839,11 +2069,18 @@ STRATEGY_PARAMS = {
             "desc": "收盘价需高于MA20的最小百分比",
         },
         {
-            "key": "board_threshold",
-            "label": "板块涨幅阈值(%)",
-            "value": 0.5,
-            "min": 0, "max": 3, "step": 0.1,
-            "desc": "所属概念板块最低涨幅要求",
+            "key": "min_vol_ratio",
+            "label": "最小量比",
+            "value": 1.5,
+            "min": 1.0, "max": 3.0, "step": 0.1,
+            "desc": "当日成交量/5日均量，确认放量突破",
+        },
+        {
+            "key": "min_price_change",
+            "label": "最小涨幅(%)",
+            "value": 2,
+            "min": 0, "max": 5, "step": 0.5,
+            "desc": "当日最小涨幅，确认突破力度",
         },
         {
             "key": "min_inflow_days",
@@ -1892,16 +2129,16 @@ STRATEGY_PARAMS = {
         {
             "key": "min_circ_mv",
             "label": "最小流通市值(亿)",
-            "value": 30,
-            "min": 10, "max": 100, "step": 10,
-            "desc": "流通市值下限",
+            "value": 50,
+            "min": 10, "max": 200, "step": 10,
+            "desc": "流通市值下限，过小流动性差",
         },
         {
             "key": "max_circ_mv",
             "label": "最大流通市值(亿)",
-            "value": 200,
-            "min": 50, "max": 500, "step": 50,
-            "desc": "流通市值上限",
+            "value": 300,
+            "min": 100, "max": 1000, "step": 50,
+            "desc": "流通市值上限，过大弹性不足",
         },
     ],
     "oversold_bounce": [
@@ -1913,11 +2150,18 @@ STRATEGY_PARAMS = {
             "desc": "跌幅需达到此值才算超跌（负数）",
         },
         {
-            "key": "min_market_cap",
+            "key": "min_circ_mv",
             "label": "最小流通市值(亿)",
-            "value": 100,
-            "min": 50, "max": 500, "step": 50,
-            "desc": "只选大市值股票，降低退市风险",
+            "value": 50,
+            "min": 10, "max": 200, "step": 10,
+            "desc": "流通市值下限，过小流动性差",
+        },
+        {
+            "key": "max_circ_mv",
+            "label": "最大流通市值(亿)",
+            "value": 300,
+            "min": 100, "max": 1000, "step": 50,
+            "desc": "流通市值上限，过大弹性不足",
         },
         {
             "key": "lower_shadow_pct",
@@ -1936,9 +2180,9 @@ STRATEGY_PARAMS = {
         {
             "key": "vol_ratio_threshold",
             "label": "放量倍数阈值",
-            "value": 1.2,
+            "value": 1.3,
             "min": 1, "max": 2, "step": 0.1,
-            "desc": "放量阳线：成交量需达到5日均量的此倍数",
+            "desc": "放量确认：量比需超过此倍数（相对5日均量）",
         },
         {
             "key": "tech_confirm_min",
@@ -1946,13 +2190,6 @@ STRATEGY_PARAMS = {
             "value": 1,
             "min": 0, "max": 3, "step": 1,
             "desc": "技术面改善信号数量要求（0=不强制，1=至少1个，2=至少2个，3=全部要求）",
-        },
-        {
-            "key": "vol_amp_ratio",
-            "label": "放量放大倍数阈值",
-            "value": 1.5,
-            "min": 1.0, "max": 3.0, "step": 0.1,
-            "desc": "量比需超过此倍数才算放量改善（相对5日均量）",
         },
     ],
 }
@@ -2258,6 +2495,97 @@ def run_sector_leader_screener(top_n=20, silent=False, params=None):
 
         bonus_score = min(bonus_score, 15)
 
+        # 【新增】三看检查加分（0-10分）- 技术面确认
+        try:
+            if ts_code not in daily_cache:
+                daily_cache[ts_code] = get_daily(ts_code, days=40)
+            records = daily_cache[ts_code]
+            
+            if len(records) >= 20:
+                three_views_passed, three_views_result = check_three_views(records)
+                if three_views_passed:
+                    bonus_score += 10
+                    bonus_details.append("三看确认+10")
+                else:
+                    # 部分通过也给少量分数
+                    passed_count = sum(1 for v in three_views_result["details"].values() if v["passed"])
+                    if passed_count == 2:
+                        bonus_score += 5
+                        bonus_details.append(f"三看部分确认({passed_count}/3)+5")
+                    elif passed_count == 1:
+                        bonus_score += 2
+                        bonus_details.append(f"三看部分确认({passed_count}/3)+2")
+        except Exception:
+            pass
+        
+        bonus_score = min(bonus_score, 15)  # 重新限制
+
+        # 【新增】高低点结构评分（0-10分）- 从涨幅评分中腾挪
+        hl_score = 0
+        hl_structure = "unknown"
+        try:
+            # 获取近40日K线用于高低点分析
+            if ts_code not in daily_cache:
+                daily_cache[ts_code] = get_daily(ts_code, days=40)
+            records = daily_cache[ts_code]
+            
+            if len(records) >= 25:
+                highs = [float(r["high"]) for r in records]
+                lows = [float(r["low"]) for r in records]
+                
+                # 使用左右5根K线法识别局部极值
+                n = 5
+                local_highs = []
+                local_lows = []
+                
+                for i in range(n, len(records) - n):
+                    current_high = highs[i]
+                    current_low = lows[i]
+                    left_highs = highs[i-n:i]
+                    left_lows = lows[i-n:i]
+                    right_highs = highs[i+1:i+n+1]
+                    right_lows = lows[i+1:i+n+1]
+                    
+                    if current_high > max(left_highs) and current_high > max(right_highs):
+                        local_highs.append((i, current_high))
+                    if current_low < min(left_lows) and current_low < min(right_lows):
+                        local_lows.append((i, current_low))
+                
+                # 分析结构
+                if len(local_highs) >= 3 and len(local_lows) >= 3:
+                    recent_highs = local_highs[-3:]
+                    recent_lows = local_lows[-3:]
+                    
+                    hh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] > recent_highs[i-1][1])
+                    hl = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] > recent_lows[i-1][1])
+                    lh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] < recent_highs[i-1][1])
+                    ll = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] < recent_lows[i-1][1])
+                    
+                    if hh >= 2 and hl >= 2:
+                        hl_score = 10
+                        hl_structure = "uptrend"
+                    elif hh >= 1 and hl >= 2:
+                        hl_score = 6
+                        hl_structure = "uptrend_weak"
+                    elif hh >= 2 and hl >= 1:
+                        hl_score = 4
+                        hl_structure = "uptrend_uncertain"
+                    elif lh >= 2 and ll >= 2:
+                        hl_score = -5  # 下降趋势扣分
+                        hl_structure = "downtrend"
+                    else:
+                        hl_score = 2
+                        hl_structure = "sideways"
+                else:
+                    hl_score = 3
+                    hl_structure = "insufficient_data"
+        except Exception:
+            hl_score = 3
+            hl_structure = "error"
+        
+        # 调整趋势评分：原涨幅+换手40分 → 35分，腾出5分给HL结构
+        trend_score = int(trend_score * 35 / 40) + hl_score
+
         total_score = trend_score + sector_score + money_score + bonus_score
 
         passed.append({
@@ -2278,6 +2606,8 @@ def run_sector_leader_screener(top_n=20, silent=False, params=None):
             "sector_score": sector_score,
             "money_score": money_score,
             "bonus_score": bonus_score,
+            "hl_score": hl_score,
+            "hl_structure": hl_structure,
             "bonus_details": bonus_details,
             "total_score": total_score,
         })
@@ -2333,12 +2663,12 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
 
     # 解析用户自定义参数
     p_min_drop_pct = _parse_params(params, "min_drop_pct", -20)
-    p_min_market_cap = _parse_params(params, "min_market_cap", 100)
+    p_min_circ_mv = _parse_params(params, "min_circ_mv", 50)
+    p_max_circ_mv = _parse_params(params, "max_circ_mv", 300)
     p_lower_shadow_pct = _parse_params(params, "lower_shadow_pct", 1.5)
     p_body_range_pct = _parse_params(params, "body_range_pct", 3)
-    p_vol_ratio_threshold = _parse_params(params, "vol_ratio_threshold", 1.2)
+    p_vol_ratio_threshold = _parse_params(params, "vol_ratio_threshold", 1.3)
     p_tech_confirm_min = _parse_params(params, "tech_confirm_min", 1)
-    p_vol_amp_ratio = _parse_params(params, "vol_amp_ratio", 1.5)
 
     # 获取大盘环境
     market = check_market_environment()
@@ -2347,6 +2677,7 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
     if not silent:
         print("  [准备] 获取股票列表...")
     stock_list = get_stock_list()
+    total_stocks_original = len(stock_list)  # 保存原始全市场数量
     if not silent:
         print(f"  → 共 {len(stock_list)} 只")
 
@@ -2360,10 +2691,13 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
             if not silent:
                 print(f"  → 获取 {len(batch_basic_df)} 条基本面记录")
             # 预过滤：只保留市值达标的股票
-            large_caps = batch_basic_df[batch_basic_df["circ_mv"] >= p_min_market_cap * 10000]
+            large_caps = batch_basic_df[
+                (batch_basic_df["circ_mv"] >= p_min_circ_mv * 10000) &
+                (batch_basic_df["circ_mv"] <= p_max_circ_mv * 10000)
+            ]
             large_cap_set = set(large_caps["ts_code"].tolist())
             if not silent:
-                print(f"  → [优化] 市值>{p_min_market_cap}亿的股票 {len(large_cap_set)} 只（从{len(stock_list)}只缩小）")
+                print(f"  → [优化] 市值{p_min_circ_mv}~{p_max_circ_mv}亿的股票 {len(large_cap_set)} 只（从{len(stock_list)}只缩小）")
             stock_list = [s for s in stock_list if s["ts_code"] in large_cap_set]
             if not silent:
                 print(f"  → [优化] 预过滤后候选池 {len(stock_list)} 只")
@@ -2466,7 +2800,7 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
             turnover = batch_basic_df[batch_basic_df["ts_code"] == ts_code].iloc[0].get("turnover_rate", 0)
 
         # 核心条件2：流通市值达标
-        if circ_mv < p_min_market_cap * 10000:
+        if circ_mv < p_min_circ_mv * 10000 or circ_mv > p_max_circ_mv * 10000:
             continue
 
         # 核心条件3：近2日出现止跌信号
@@ -2532,7 +2866,7 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
             vol_ma5_all = calc_ma(volumes, 5)
             if vol_ma5_all and vol_ma5_all > 0:
                 vol_ratio_now = volumes[-1] / vol_ma5_all
-                if vol_ratio_now >= p_vol_amp_ratio:
+                if vol_ratio_now >= p_vol_ratio_threshold:
                     tech_improve_signals.append("量比放大")
 
         # 信号F：出现阳线（今日收盘 > 开盘）
@@ -2661,25 +2995,81 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
         bonus_score = min(bonus_score, 15)
 
         # ============================================================
-        # 【新增】维度5：技术面改善加分（0-20分）
+        # 【新增】维度5：技术面改善加分（0-15分，原20分降为15分，腾5分给HL结构）
         # ============================================================
         tech_score = 0
         if tech_improve_signals:
             signal_count = len(set(tech_improve_signals))
             if signal_count == 3:
-                tech_score = 20
-                bonus_details.append("三线改善(MA金叉+放量+阳线)+20")
-            elif signal_count == 2:
                 tech_score = 15
-                bonus_details.append("双线改善(" + '+'.join(set(tech_improve_signals)) + ")+15")
+                bonus_details.append("三线改善(MA金叉+放量+阳线)+15")
+            elif signal_count == 2:
+                tech_score = 12
+                bonus_details.append("双线改善(" + '+'.join(set(tech_improve_signals)) + ")+12")
             else:
-                tech_score = 10
-                bonus_details.append("单线改善(" + tech_improve_signals[0] + ")+10")
+                tech_score = 8
+                bonus_details.append("单线改善(" + tech_improve_signals[0] + ")+8")
         else:
             # 无技术改善信号，降分处理
             bonus_details.append("无技术面改善信号")
 
-        total_score = trend_score + sector_score + money_score + bonus_score + tech_score
+        # 【新增】维度6：高低点结构评分（0-10分）
+        # 超跌反弹策略中，HL结构用于确认下跌是否结束、反弹是否开始
+        hl_score = 0
+        hl_structure = "unknown"
+        try:
+            # 使用已有的 highs/lows 数据（前面已计算）
+            n = 5
+            local_highs = []
+            local_lows = []
+            
+            for i in range(n, len(records) - n):
+                current_high = highs[i]
+                current_low = lows[i]
+                left_highs = highs[i-n:i]
+                left_lows = lows[i-n:i]
+                right_highs = highs[i+1:i+n+1]
+                right_lows = lows[i+1:i+n+1]
+                
+                if current_high > max(left_highs) and current_high > max(right_highs):
+                    local_highs.append((i, current_high))
+                if current_low < min(left_lows) and current_low < min(right_lows):
+                    local_lows.append((i, current_low))
+            
+            # 分析结构（超跌反弹策略中，关注低点是否停止创新低）
+            if len(local_highs) >= 3 and len(local_lows) >= 3:
+                recent_highs = local_highs[-3:]
+                recent_lows = local_lows[-3:]
+                
+                hh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] > recent_highs[i-1][1])
+                hl = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] > recent_lows[i-1][1])
+                lh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] < recent_highs[i-1][1])
+                ll = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] < recent_lows[i-1][1])
+                
+                # 超跌反弹策略的特殊逻辑：
+                # - HL >= 2（低点抬高）：下跌可能结束，反弹有望开始 +10分
+                # - HH >= 1 且 HL >= 1：初步企稳 +6分
+                # - 继续LL（低点创新低）：下跌趋势延续，不适合抄底 -5分
+                if hl >= 2:
+                    hl_score = 10
+                    hl_structure = "rebound_ready"
+                elif hh >= 1 and hl >= 1:
+                    hl_score = 6
+                    hl_structure = "stabilizing"
+                elif ll >= 2:
+                    hl_score = -5  # 仍在创新低，不适合抄底
+                    hl_structure = "downtrend_continues"
+                else:
+                    hl_score = 3
+                    hl_structure = "uncertain"
+            else:
+                hl_score = 3
+                hl_structure = "insufficient_data"
+        except Exception:
+            hl_score = 3
+            hl_structure = "error"
+
+        total_score = trend_score + sector_score + money_score + bonus_score + tech_score + hl_score
 
         passed.append({
             "ts_code": ts_code,
@@ -2704,6 +3094,8 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
             "money_score": money_score,
             "bonus_score": bonus_score,
             "tech_score": tech_score,
+            "hl_score": hl_score,
+            "hl_structure": hl_structure,
             "bonus_details": bonus_details,
             "total_score": total_score,
         })
@@ -2727,7 +3119,7 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
         "results": top_results,
         "all_results": passed,
         "stats": {
-            "total_stocks": len(stock_list),
+            "total_stocks": total_stocks_original,  # 使用原始全市场数量
             "after_basic": total_checked,
             "after_trend": len(passed) + total_checked - len(passed),  # 止跌信号过滤
             "after_sector": len(passed),

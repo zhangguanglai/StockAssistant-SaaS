@@ -8,6 +8,7 @@ v3.1.1: 修复兼容层写入不删除的问题，改用 database.py 原生 CRUD
 
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
+import pandas as pd
 
 from auth import login_required, get_current_user_id
 from database import (
@@ -85,8 +86,8 @@ def _build_position_list(user_id):
 
 @position_bp.route("/api/index")
 def get_index_data():
-    """获取大盘指数行情（东方财富 → 新浪 → Tushare 降级）"""
-    from helpers import cache_get, cache_set
+    """获取大盘指数行情（东方财富 → 新浪 → Tushare 降级）+ 高低点结构分析"""
+    from helpers import cache_get, cache_set, get_hl_structure
     cache_key = "api_index"
     cached = cache_get(cache_key)
     if cached is not None:
@@ -104,9 +105,58 @@ def get_index_data():
         for v in quotes.values():
             v["_source"] = "tushare"
 
+    # 添加高低点结构分析（上证指数和沪深300）
+    for ts_code in quotes:
+        try:
+            hl = get_hl_structure(ts_code, n=5, lookback=60)
+            quotes[ts_code]["hl_structure"] = {
+                "structure": hl.get("structure"),
+                "score": hl.get("score"),
+                "signal": hl.get("signal"),
+                "high_trend": hl.get("high_trend"),
+                "low_trend": hl.get("low_trend"),
+            }
+        except Exception as e:
+            print(f"[WARN] 大盘高低点分析失败({ts_code}): {e}")
+            quotes[ts_code]["hl_structure"] = None
+
     ttl = 15 if is_trade_time() else 300
     cache_set(cache_key, quotes, ttl)
     return jsonify(quotes)
+
+
+@position_bp.route("/api/index/hl-structure")
+def get_index_hl_structure():
+    """获取大盘指数高低点结构详细分析（支持参数调整）"""
+    from helpers import get_hl_structure
+    
+    # 支持参数：n（窗口大小，默认5），lookback（回溯天数，默认60）
+    n = request.args.get("n", 5, type=int)
+    lookback = request.args.get("lookback", 60, type=int)
+    
+    result = {}
+    for ts_code in INDEX_CODES:
+        try:
+            hl = get_hl_structure(ts_code, n=n, lookback=lookback)
+            result[ts_code] = {
+                "name": INDEX_CODES[ts_code]["name"],
+                "structure": hl.get("structure"),
+                "score": hl.get("score"),
+                "signal": hl.get("signal"),
+                "recent_highs": hl.get("recent_highs"),
+                "recent_lows": hl.get("recent_lows"),
+                "high_trend": hl.get("high_trend"),
+                "low_trend": hl.get("low_trend"),
+                "hh_count": hl.get("hh_count"),
+                "hl_count": hl.get("hl_count"),
+                "lh_count": hl.get("lh_count"),
+                "ll_count": hl.get("ll_count"),
+                "analysis_date": hl.get("analysis_date"),
+            }
+        except Exception as e:
+            result[ts_code] = {"error": str(e)}
+    
+    return jsonify(result)
 
 
 def _get_index_quotes_tushare():
@@ -786,6 +836,40 @@ def get_position_advice(position_id):
         score -= 5
         reasons.append(f"连跌{consec_down}天，趋势偏弱（-5）")
 
+    # 【新增】6. 高低点结构分析
+    hl_structure = {"structure": "unknown", "score": 0, "signal": "无法分析", "recent_highs": [], "recent_lows": []}
+    try:
+        from helpers import analyze_hl_structure
+        import pandas as pd
+        
+        df_hl = pd.DataFrame({
+            'high': highs,
+            'low': lows,
+            'close': closes,
+        })
+        hl_result = analyze_hl_structure(df_hl, n=5)
+        hl_structure = hl_result
+        
+        # 根据结构调整评分
+        if hl_result["structure"] == "uptrend":
+            hl_bonus = 10
+            score += hl_bonus
+            reasons.append(f"高低点结构健康（{hl_result['signal']}）+{hl_bonus}")
+        elif hl_result["structure"] == "downtrend":
+            hl_penalty = -15
+            score += hl_penalty
+            reasons.append(f"高低点结构恶化（{hl_result['signal']}）{hl_penalty}")
+        elif hl_result["high_trend"] == "up":
+            hl_bonus = 5
+            score += hl_bonus
+            reasons.append(f"高点突破，趋势转强 +{hl_bonus}")
+        elif hl_result["low_trend"] == "down":
+            hl_penalty = -8
+            score += hl_penalty
+            reasons.append(f"低点下移，风险增加 {hl_penalty}")
+    except Exception as e:
+        print(f"[WARN] 高低点结构分析失败: {e}")
+
     # 建议映射
     if score >= 30:
         action = "加仓"
@@ -873,6 +957,15 @@ def get_position_advice(position_id):
             "avg_cost": round(avg_cost, 3),
             "profit_pct": round(profit_pct, 2),
             "position_pct": position_pct,
+        },
+        "hl_structure": {
+            "structure": hl_structure.get("structure", "unknown"),
+            "score": hl_structure.get("score", 0),
+            "signal": hl_structure.get("signal", ""),
+            "high_trend": hl_structure.get("high_trend", "flat"),
+            "low_trend": hl_structure.get("low_trend", "flat"),
+            "recent_highs": hl_structure.get("recent_highs", []),
+            "recent_lows": hl_structure.get("recent_lows", []),
         },
         "profit": {
             "profit_pct": round(profit_pct, 2),
@@ -1061,6 +1154,8 @@ def get_review_report(period):
         "emotion_stats": emotion_stats,
         "top_reasons": top_reasons,
         "trades": trades,
+        "buys": buys,
+        "sells": sells,
         "summary": summary_text,
     })
 
@@ -1149,12 +1244,25 @@ def get_market_regime():
 # 选股回测 API
 # ============================================================
 
+# 回测结果缓存：{(strategy, days, hold): (result, timestamp)}
+_backtest_cache = {}
+_BACKTEST_CACHE_TTL = 3600  # 缓存1小时
+
 @position_bp.route("/api/backtest")
 @login_required
 def run_backtest():
-    """选股规则历史回测"""
+    """选股规则历史回测（策略联动版）"""
     days_back = int(request.args.get("days", 30))
     hold_days = int(request.args.get("hold", 5))
+    strategy = request.args.get("strategy", "trend_break")  # 新增：策略类型
+
+    # 检查缓存
+    cache_key = (strategy, days_back, hold_days)
+    cached = _backtest_cache.get(cache_key)
+    if cached:
+        result, timestamp = cached
+        if time.time() - timestamp < _BACKTEST_CACHE_TTL:
+            return jsonify(result)
 
     try:
         from screener import get_recent_trade_dates
@@ -1173,6 +1281,7 @@ def run_backtest():
             return jsonify({"error": "回测日期区间不足"}), 500
 
         daily_basic_cache = {}
+        daily_cache = {}  # 用于获取历史日线数据
 
         def get_daily_basic_cached(td):
             if td in daily_basic_cache:
@@ -1187,6 +1296,67 @@ def run_backtest():
                 daily_basic_cache[td] = pd.DataFrame()
             return daily_basic_cache[td]
 
+        def get_daily_cached(td):
+            """获取日线数据（用于计算MA等技术指标）"""
+            if td in daily_cache:
+                return daily_cache[td]
+            try:
+                df = pro.daily(trade_date=td, fields="ts_code,close,open,high,low,vol,amount,pct_chg")
+                daily_cache[td] = df if df is not None else pd.DataFrame()
+            except Exception:
+                daily_cache[td] = pd.DataFrame()
+            return daily_cache[td]
+
+        def get_ma(ts_code, end_date, days=20):
+            """计算某股票的历史MA"""
+            try:
+                df = pro.daily(ts_code=ts_code, end_date=end_date, limit=days+5)
+                if df is None or df.empty or len(df) < days:
+                    return None
+                df = df.sort_values("trade_date")
+                return df["close"].tail(days).mean()
+            except Exception:
+                return None
+
+        def screen_candidates_strategy(df_basic, df_daily, date, strategy_type):
+            """根据策略类型筛选候选股票"""
+            if df_basic is None or df_basic.empty:
+                return pd.DataFrame()
+
+            # 基础过滤（所有策略通用）
+            candidates = df_basic[
+                (~df_basic["ts_code"].str.contains("BJ")) &
+                (df_basic["circ_mv"] > 50 * 10000) &
+                (df_basic["turnover_rate"] > 1.0)
+            ].copy()
+
+            if candidates.empty:
+                return candidates
+
+            if strategy_type == "trend_break":
+                # 趋势突破策略：涨跌幅适中 + 近期有趋势
+                candidates = candidates[
+                    (candidates["pct_chg"].between(-2, 5)) &
+                    (candidates["vol"] > candidates["vol"].median())  # 放量
+                ]
+            elif strategy_type == "sector_leader":
+                # 板块龙头策略：涨幅较大但不过高
+                candidates = candidates[
+                    (candidates["pct_chg"].between(3, 9)) &
+                    (candidates["turnover_rate"].between(3, 15))
+                ]
+            elif strategy_type == "oversold_bounce":
+                # 超跌反弹策略：近期下跌 + 当日止跌
+                # 简化为仅使用当日涨跌幅，避免shift操作在边界情况下的问题
+                candidates = candidates[
+                    candidates["pct_chg"].between(-5, 3)
+                ]
+            else:
+                # 默认策略
+                candidates = candidates[candidates["pct_chg"].between(-2, 3)]
+
+            return candidates
+
         results = []
         total_screened = 0
         total_pass = 0
@@ -1194,18 +1364,16 @@ def run_backtest():
 
         for date in eval_dates:
             date_idx = all_dates_asc.index(date)
-            df_today = get_daily_basic_cached(date)
-            if df_today.empty:
+            df_today_basic = get_daily_basic_cached(date)
+            df_today_daily = get_daily_cached(date)
+
+            if df_today_basic is None or df_today_basic.empty:
                 continue
 
-            candidates = df_today[
-                (df_today["pct_chg"].between(-2, 3)) &
-                (df_today["turnover_rate"] > 1.0) &
-                (df_today["circ_mv"] > 50 * 10000) &
-                (~df_today["ts_code"].str.contains("BJ"))
-            ]
+            # 使用策略筛选
+            candidates = screen_candidates_strategy(df_today_basic, df_today_daily, date, strategy)
 
-            total_screened += len(df_today)
+            total_screened += len(df_today_basic)
             total_pass += len(candidates)
 
             if candidates.empty:
@@ -1216,13 +1384,16 @@ def run_backtest():
                 continue
             future_date = all_dates_asc[future_idx]
             df_future = get_daily_basic_cached(future_date)
-            if df_future.empty:
+            if df_future is None or df_future.empty:
                 continue
 
             df_merged = candidates[["ts_code", "close"]].merge(
                 df_future[["ts_code", "close"]].rename(columns={"close": "close_future"}),
                 on="ts_code", how="inner"
             )
+            if df_merged.empty:
+                continue
+
             df_merged["return_pct"] = (df_merged["close_future"] - df_merged["close"]) / df_merged["close"] * 100
 
             for _, r in df_merged.iterrows():
@@ -1281,7 +1452,7 @@ def run_backtest():
         else:
             summary = f"全市场回测：胜率{wr}%，平均收益{avg_ret:.2f}%，盈亏比{profit_loss_ratio}，{hold_days}日持有期效果不佳，需要调整筛选标准。"
 
-        return jsonify({
+        result = {
             "period": f"近{days_back}天",
             "hold_days": hold_days,
             "total_signals": total_trades,
@@ -1296,7 +1467,10 @@ def run_backtest():
             "max_drawdown": max_drawdown,
             "trades": sorted(results, key=lambda x: x["return_pct"], reverse=True)[:50],
             "summary": summary,
-        })
+        }
+        # 保存到缓存
+        _backtest_cache[cache_key] = (result, time.time())
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1432,6 +1606,153 @@ def search_stock():
             break
 
     return jsonify({"results": results})
+
+
+@position_bp.route("/api/check-three-views")
+@login_required
+def check_three_views():
+    """
+    检查股票的"三看"条件
+    返回：高低点抬高、均线多头排列、量价配合的检查结果
+    """
+    ts_code = request.args.get("ts_code", "").strip()
+    if not ts_code:
+        return jsonify({"error": "请提供股票代码"}), 400
+
+    try:
+        # 获取最近60天的日线数据
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+
+        df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df.empty or len(df) < 20:
+            return jsonify({"error": "数据不足，无法分析"}), 400
+
+        df = df.sort_values("trade_date").reset_index(drop=True)
+
+        # 计算均线
+        df["ma5"] = df["close"].rolling(window=5).mean()
+        df["ma10"] = df["close"].rolling(window=10).mean()
+        df["ma20"] = df["close"].rolling(window=20).mean()
+
+        # 获取最新数据
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else None
+
+        result = {
+            "ts_code": ts_code,
+            "name": get_stock_info(ts_code).get("name", ""),
+            "trade_date": latest["trade_date"],
+            "close": round(float(latest["close"]), 3),
+            "checks": {}
+        }
+
+        # ========== 一看：高低点抬高 ==========
+        # 找最近5个波段的低点和高点（使用3日窗口确认极值，更稳健）
+        lows = []
+        highs = []
+        window = 2  # 前后各2天，共5日窗口
+        for i in range(window, len(df) - window):
+            # 低点：比前后window天都低
+            is_low = all(df.iloc[i]["low"] < df.iloc[i-j]["low"] for j in range(1, window+1)) and \
+                     all(df.iloc[i]["low"] < df.iloc[i+j]["low"] for j in range(1, window+1))
+            if is_low:
+                lows.append((i, float(df.iloc[i]["low"])))
+            # 高点：比前后window天都高
+            is_high = all(df.iloc[i]["high"] > df.iloc[i-j]["high"] for j in range(1, window+1)) and \
+                      all(df.iloc[i]["high"] > df.iloc[i+j]["high"] for j in range(1, window+1))
+            if is_high:
+                highs.append((i, float(df.iloc[i]["high"])))
+
+        # 取最近3个低点和高点
+        recent_lows = lows[-3:] if len(lows) >= 3 else lows
+        recent_highs = highs[-3:] if len(highs) >= 3 else highs
+
+        low_increasing = len(recent_lows) >= 2 and all(
+            recent_lows[i][1] > recent_lows[i-1][1] for i in range(1, len(recent_lows))
+        )
+        high_increasing = len(recent_highs) >= 2 and all(
+            recent_highs[i][1] > recent_highs[i-1][1] for i in range(1, len(recent_highs))
+        )
+
+        result["checks"]["high_low"] = {
+            "passed": bool(low_increasing and high_increasing),
+            "low_increasing": bool(low_increasing),
+            "high_increasing": bool(high_increasing),
+            "recent_lows": [round(x[1], 3) for x in recent_lows],
+            "recent_highs": [round(x[1], 3) for x in recent_highs],
+            "description": "高低点抬高" if (low_increasing and high_increasing) else "高低点未抬高",
+            "detail": f"最近{len(recent_lows)}个低点: {[round(x[1], 2) for x in recent_lows]} | 最近{len(recent_highs)}个高点: {[round(x[1], 2) for x in recent_highs]}"
+        }
+
+        # ========== 二看：均线多头排列 ==========
+        ma5 = float(latest["ma5"]) if not pd.isna(latest["ma5"]) else 0
+        ma10 = float(latest["ma10"]) if not pd.isna(latest["ma10"]) else 0
+        ma20 = float(latest["ma20"]) if not pd.isna(latest["ma20"]) else 0
+
+        ma_bull = ma5 > ma10 > ma20 > 0
+
+        result["checks"]["ma"] = {
+            "passed": bool(ma_bull),
+            "ma5": round(ma5, 3),
+            "ma10": round(ma10, 3),
+            "ma20": round(ma20, 3),
+            "description": "均线多头排列" if ma_bull else "均线非多头排列",
+            "detail": f"MA5={ma5:.2f} {'>' if ma5 > ma10 else '<'} MA10={ma10:.2f} {'>' if ma10 > ma20 else '<'} MA20={ma20:.2f}"
+        }
+
+        # ========== 三看：量价配合 ==========
+        # 标准量比 = 当日成交量 / 过去5日平均成交量
+        today_vol = float(latest["vol"])
+        vol_ma5 = df["vol"].tail(5).mean()  # 最近5日平均成交量（包含当日）
+        vol_ratio = today_vol / vol_ma5 if vol_ma5 > 0 else 1.0
+
+        # 上涨日 vs 下跌日成交量（近10个交易日）
+        up_days = df[df["close"] > df["open"]].tail(10)
+        down_days = df[df["close"] < df["open"]].tail(10)
+        up_vol = up_days["vol"].mean() if len(up_days) > 0 else 0
+        down_vol = down_days["vol"].mean() if len(down_days) > 0 else 0
+
+        vol_ok = vol_ratio > 1.0 and up_vol > down_vol
+
+        result["checks"]["volume"] = {
+            "passed": bool(vol_ok),
+            "vol_ratio": round(float(vol_ratio), 2),
+            "today_vol": round(today_vol, 0),
+            "vol_ma5": round(float(vol_ma5), 0),
+            "up_vol_avg": round(float(up_vol), 0),
+            "down_vol_avg": round(float(down_vol), 0),
+            "description": "量价配合良好" if vol_ok else "量价配合不佳",
+            "vol_ratio_detail": round(float(vol_ratio), 2),
+            "today_vol": round(today_vol, 0),
+            "vol_ma5": round(float(vol_ma5), 0),
+            "up_down_ratio": round(float(up_vol / down_vol), 2) if down_vol > 0 else 0,
+            "up_vol_avg": round(float(up_vol), 0),
+            "down_vol_avg": round(float(down_vol), 0),
+            "detail": f"量比={vol_ratio:.2f}（当日/5日均），上涨日均量/下跌日均量={up_vol/down_vol:.2f}（最近10个交易日）"
+        }
+
+        # 综合结论
+        all_passed = result["checks"]["high_low"]["passed"] and result["checks"]["ma"]["passed"] and result["checks"]["volume"]["passed"]
+        passed_count = sum(1 for c in result["checks"].values() if c["passed"])
+
+        result["summary"] = {
+            "all_passed": all_passed,
+            "passed_count": passed_count,
+            "total_count": 3,
+            "recommendation": "符合进场条件" if all_passed else ("谨慎买入" if passed_count >= 2 else "建议观望"),
+            "suggestion": "三看全部满足，可以买入" if all_passed else (
+                "满足2项，可小仓位试探" if passed_count >= 2 else "条件不满足，建议等待"
+            )
+        }
+
+        return jsonify(result)
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] 三看检查失败: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"检查失败: {str(e)}"}), 500
 
 
 @position_bp.route("/api/export")
