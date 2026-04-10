@@ -308,6 +308,7 @@ setup(){
     function switchToScreener(){activeTab.value='screener';loadScreenResult()}
     function switchToReview(){activeTab.value='review';loadReview(reviewPeriod.value)}
     function switchToStrategy(){activeTab.value='strategy';loadRegime();loadStrategyPerformance()}
+    function selectStrategy(key){currentStrategy.value=key;}
 
     // === Review Functions ===
     async function loadReview(period){
@@ -1181,7 +1182,7 @@ setup(){
         screenParams,paramsLoading,paramsDefault,forceMode,
         refreshData,searchStock,selectStock,submitPosition,openAddModal,openTradeModal,
         openSellModal,submitSell,openAlertModal,submitAlerts,clearAlerts,openDetailModal,closeDetailModal,openAdviceModal,quickAddFromAdvice,quickSellFromAdvice,confirmDelete,deleteTrade,
-        saveCapital,switchToTradeLog,switchToAnalysis,switchToScreener,switchToReview,switchToStrategy,
+        saveCapital,switchToTradeLog,switchToAnalysis,switchToScreener,switchToReview,switchToStrategy,selectStrategy,
         loadReview,loadRegime,runBacktest,checkAlerts,loadKline,
         startScreen,startScreenForce,pollScreenResult,loadScreenResult,quickBuyFromScreen,
         addToWatch,addAllToWatch,showWatchReport,watchAdding,watchList,watchReport,
