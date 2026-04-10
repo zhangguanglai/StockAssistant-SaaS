@@ -83,6 +83,8 @@ setup(){
             suitable: '抄底机会捕捉'
         }
     });
+    // 确保 strategyList 始终有值，防止模板访问 undefined
+    const strategyListSafe=computed(()=>strategyList.value||{});
     const currentStrategyMeta=computed(()=>strategyList.value[currentStrategy.value]||null);
     const screenStrategyReason=ref('');
     const showAddModal=ref(false),showSellModal=ref(false),showDetailModal=ref(false),showAlertModal=ref(false),showImportModal=ref(false),showParamsModal=ref(false);
@@ -1170,7 +1172,7 @@ setup(){
     return{isLoggedIn,currentUser,showAuthModal,authMode,authError,authSubmitting,loginForm,registerForm,doLogin,doRegister,doLogout,
         positions,summary,loading,searchKeyword,sortKey,sortDir,activeTab,indexData,indexSource,indexTime,tradeLogs,tradeLogStats,capitalForm,
         screenMarket,screenStats,screenResults,screenHistory,screenInfo,screenBonusTags,
-        currentStrategy,strategyList,currentStrategyMeta,screenStrategyReason,
+        currentStrategy,strategyList,strategyListSafe,currentStrategyMeta,screenStrategyReason,
         showAddModal,showSellModal,showDetailModal,showAlertModal,showImportModal,showParamsModal,showAdviceModal,editingPosition,detailPosition,sellTarget,alertTarget,adviceTarget,
         emotionLabels,addForm,sellForm,alertForm,addError,sellError,submitting,submittingSell,searchResults,importData,importMode,importError,
         toastMsg,sellPreview,filteredPositions,priceLevels,priceLevelsLoading,priceLevelsError,adviceData,adviceLoading,adviceError,

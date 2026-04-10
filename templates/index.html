@@ -212,8 +212,8 @@
             🤖 智能推荐：{{screenStrategyReason}}
         </div>
         <!-- 策略选择器 - 卡片式重构 -->
-        <div v-if="Object.keys(strategyList).length>0" class="strategy-selector">
-            <div v-for="(meta,key) in strategyList" :key="key"
+        <div v-if="Object.keys(strategyListSafe).length>0" class="strategy-selector">
+            <div v-for="(meta,key) in strategyListSafe" :key="key"
                 class="strategy-card"
                 :class="{active:currentStrategy===key,recommended:screenStrategyRecommended===key}"
                 @click="selectStrategy(key)">
@@ -255,7 +255,7 @@
         <!-- 运行按钮 -->
         <div class="toolbar">
             <button class="btn btn-primary" @click="startScreen" :disabled="screenInfo.running">
-                {{screenInfo.running?'⏳ 筛选进行中...':strategyList[currentStrategy]?strategyList[currentStrategy].icon+' '+strategyList[currentStrategy].name:'🔍 开始选股筛选'}}
+                {{screenInfo.running?'⏳ 筛选进行中...':strategyListSafe[currentStrategy]?strategyListSafe[currentStrategy].icon+' '+strategyListSafe[currentStrategy].name:'🔍 开始选股筛选'}}
             </button>
             <!-- 策略胜率提示（小优化） -->
             <button v-if="!screenInfo.running&&strategyBacktestData[currentStrategy]" 
@@ -965,7 +965,7 @@
             <div>
                 <h3 style="margin:0 0 4px 0">🤖 策略回测验证</h3>
                 <p style="font-size:12px;color:var(--text-muted);margin:0">
-                    当前策略：<span style="color:var(--blue);font-weight:600">{{strategyList[currentStrategy]?strategyList[currentStrategy].name:'趋势突破'}}</span>
+                    当前策略：<span style="color:var(--blue);font-weight:600">{{strategyListSafe[currentStrategy]?strategyListSafe[currentStrategy].name:'趋势突破'}}</span>
                     <span style="margin:0 8px">|</span>
                     验证该策略在历史数据中的表现
                 </p>
@@ -2398,7 +2398,7 @@
 
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-<script src="/static/js/app.js?v=9"></script>
+<script src="/static/js/app.js?v=10"></script>
 <script>
 // CDN加载失败检测
 document.addEventListener('DOMContentLoaded', function() {
