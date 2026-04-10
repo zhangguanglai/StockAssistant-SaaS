@@ -558,7 +558,7 @@ setup(){
     async function loadStrategies(){
         try{
             const r=await fetchWithAuth(`${API}/api/screen/strategies`);const d=await r.json();
-            if(d.strategies){
+            if(d.strategies&&Object.keys(d.strategies).length>0){
                 // [UI-03 修复] 合并而非覆盖：保留默认值，用 API 数据补充/更新，防止模板在加载前访问 undefined
                 Object.keys(d.strategies).forEach(key=>{
                     strategyList.value[key]=Object.assign({},strategyList.value[key]||{},d.strategies[key]);
@@ -569,7 +569,10 @@ setup(){
                     screenStrategyReason.value=d.reason;
                 }
             }
-        }catch(e){}
+        }catch(e){
+            // [UI-04 修复] API 失败时保留默认值，不覆盖
+            console.log('[loadStrategies] API 失败，使用默认策略列表');
+        }
     }
     loadStrategies();
     const screenBonusTags=computed(()=>{const tags=new Set();screenResults.value.forEach(r=>{(r.bonus_details||[]).forEach(t=>tags.add(t))});return [...tags]});
