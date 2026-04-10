@@ -66,7 +66,23 @@ setup(){
     const screenInfo=ref({running:false,hasResult:false,lastRun:null,runTime:null});
     const watchAdding=ref(false),watchList=ref([]),watchReport=ref(null);
     const currentStrategy=ref('trend_break');
-    const strategyList=ref({});
+    const strategyList=ref({
+        'trend_break': {
+            name: '趋势突破',
+            icon: '📈',
+            suitable: '中期趋势投资者'
+        },
+        'sector_leader': {
+            name: '板块龙头',
+            icon: '🏆',
+            suitable: '短期热点追踪'
+        },
+        'oversold_bounce': {
+            name: '超跌反弹',
+            icon: '📉',
+            suitable: '抄底机会捕捉'
+        }
+    });
     const currentStrategyMeta=computed(()=>strategyList.value[currentStrategy.value]||null);
     const screenStrategyReason=ref('');
     const showAddModal=ref(false),showSellModal=ref(false),showDetailModal=ref(false),showAlertModal=ref(false),showImportModal=ref(false),showParamsModal=ref(false);
