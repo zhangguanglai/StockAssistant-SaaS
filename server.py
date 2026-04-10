@@ -87,6 +87,6 @@ if __name__ == "__main__":
     
     # Railway 环境支持：从环境变量读取 PORT 和 HOST
     port = int(os.environ.get("PORT", PORT))
-    host = os.environ.get("HOST", HOST)
+    host = os.environ.get("HOST", "0.0.0.0")  # Railway 需要 0.0.0.0
     print(f"[INFO] 访问 http://{host}:{port}")
     app.run(host=host, port=port, debug=DEBUG)
