@@ -3018,7 +3018,9 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
         hl_score = 0
         hl_structure = "unknown"
         try:
-            # 使用已有的 highs/lows 数据（前面已计算）
+            # 计算 highs/lows 数据
+            highs = [float(r["high"]) for r in records]
+            lows = [float(r["low"]) for r in records]
             n = 5
             local_highs = []
             local_lows = []

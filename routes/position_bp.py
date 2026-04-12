@@ -1013,12 +1013,14 @@ def get_kline_data(ts_code):
         closes = df["close"].tolist()
         volumes = df["vol"].tolist()
 
-        ma5 = [None] * (len(closes) - 5) + [round(sum(closes[max(0, i-4):i+1]) / min(5, i+1), 3) for i in range(4, len(closes))]
-        if len(ma5) < len(dates):
-            ma5 = [None] * (len(dates) - len(ma5)) + ma5
-        ma20 = [None] * (len(closes) - 20) + [round(sum(closes[max(0, i-19):i+1]) / min(20, i+1), 3) for i in range(19, len(closes))]
-        if len(ma20) < len(dates):
-            ma20 = [None] * (len(dates) - len(ma20)) + ma20
+        # 计算MA5和MA20（使用pandas rolling计算更准确）
+        import pandas as pd
+        df_temp = pd.DataFrame({'close': closes})
+        ma5_list = df_temp['close'].rolling(window=5, min_periods=1).mean().round(3).tolist()
+        ma20_list = df_temp['close'].rolling(window=20, min_periods=1).mean().round(3).tolist()
+        # 前4个MA5和前19个MA20设为None（数据不足）
+        ma5 = [None] * 4 + ma5_list[4:] if len(ma5_list) > 4 else ma5_list
+        ma20 = [None] * 19 + ma20_list[19:] if len(ma20_list) > 19 else ma20_list
 
         dates_fmt = [d[4:6] + "/" + d[6:8] for d in dates]
 
@@ -1220,6 +1222,51 @@ def get_market_regime():
         realtime_pct_chg = sh_quote.get("pct_chg", 0)
         realtime_change = sh_quote.get("change", 0)
         
+        # 【新增】今日市场速览数据（来自市场Tab）
+        market_summary = {}
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+            
+            # 1. 涨停数据（今日）
+            try:
+                limit_df = pro.limit_list(trade_date=today)
+                if not limit_df.empty:
+                    up_count = len(limit_df[limit_df['limit'] == 'U'])
+                    market_summary['limit_up_count'] = up_count
+                else:
+                    market_summary['limit_up_count'] = None
+            except:
+                market_summary['limit_up_count'] = None
+            
+            # 2. 北向资金（今日）
+            try:
+                hsgt_df = pro.moneyflow_hsgt(start_date=today, end_date=today)
+                if not hsgt_df.empty:
+                    north_money = hsgt_df.iloc[0].get('north_money', 0)
+                    market_summary['northbound_flow'] = round(north_money, 2)
+                else:
+                    market_summary['northbound_flow'] = None
+            except:
+                market_summary['northbound_flow'] = None
+            
+            # 3. 领涨板块（今日）
+            try:
+                sector_df = pro.moneyflow_ind_ths(trade_date=today)
+                if not sector_df.empty and 'net_mf_amount' in sector_df.columns:
+                    # 按净流入排序取前3
+                    top_sectors = sector_df.nlargest(3, 'net_mf_amount')[['name', 'net_mf_amount']]
+                    market_summary['top_sectors'] = [
+                        {"name": row['name'], "flow": round(row['net_mf_amount'], 2)}
+                        for _, row in top_sectors.iterrows()
+                    ]
+                else:
+                    market_summary['top_sectors'] = []
+            except:
+                market_summary['top_sectors'] = []
+                
+        except Exception:
+            market_summary = {'limit_up_count': None, 'northbound_flow': None, 'top_sectors': []}
+        
         return jsonify({
             "regime": regime,
             "regime_score": regime_score,
@@ -1233,6 +1280,7 @@ def get_market_regime():
                 "change": realtime_change,    # 当日实时涨跌额
             },
             "strategy": strategy,
+            "market_summary": market_summary,  # 【新增】今日市场速览
             "_source": sh_quote.get("_source", "tushare"),  # 数据源标识
             "_time": sh_quote.get("_time", ""),  # 时间戳
         })

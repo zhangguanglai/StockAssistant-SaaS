@@ -758,7 +758,7 @@ def get_fina_indicator(ts_code, periods=4):
     """
     获取个股财务指标（fina_indicator）
     包含：ROE、ROA、毛利率、净利率、资产负债率、EPS、营收增长等
-    返回: [dict, ...] 按期倒序
+    返回: [dict, ...] 按期倒序，百分比字段已转换为小数
     """
     cache_key = f"fina_indicator_{ts_code}"
     cached = cache_get(cache_key)
@@ -773,6 +773,14 @@ def get_fina_indicator(ts_code, periods=4):
         if df.empty:
             return []
         df = df.sort_values("end_date", ascending=False).head(periods)
+        
+        # Tushare返回的百分比字段需要转换为小数（如79.0 -> 0.79）
+        pct_fields = ['roe', 'roa', 'grossprofit_margin', 'netprofit_margin', 'debt_to_assets',
+                      'yoy_eps', 'yoy_sales', 'yoy_equity', 'yoy_asset', 'yoy_profit', 'or_yoy']
+        for field in pct_fields:
+            if field in df.columns:
+                df[field] = df[field] / 100.0
+        
         result = df.to_dict("records")
         cache_set(cache_key, result, 3600)  # 1小时缓存
         return result
@@ -1022,3 +1030,105 @@ def get_moneyflow_ind_dc(trade_date=None):
     except Exception as e:
         print(f"[ERROR] 获取东财行业资金流失败: {e}")
         return []
+
+
+# ============================================================
+# 高低点结构分析
+# ============================================================
+
+def get_hl_structure(ts_code, n=5, lookback=60):
+    """
+    获取股票/指数的高低点结构分析
+    
+    Args:
+        ts_code: 股票代码
+        n: 极值识别窗口大小（前后各n天）
+        lookback: 回溯天数
+    
+    Returns:
+        dict: {
+            "structure": "上升"/"下降"/"震荡",
+            "score": 0-100,
+            "signal": "买入"/"卖出"/"观望",
+            "high_trend": "上升"/"下降"/"走平",
+            "low_trend": "上升"/"下降"/"走平",
+        }
+    """
+    try:
+        # 获取历史数据
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=lookback + 30)).strftime('%Y%m%d')
+        
+        df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df is None or len(df) < 20:
+            return {"structure": "未知", "score": 50, "signal": "观望", "high_trend": "走平", "low_trend": "走平"}
+        
+        df = df.sort_values('trade_date')
+        
+        # 识别高低点（简化版：使用前后n天极值）
+        highs = df['high'].values
+        lows = df['low'].values
+        
+        # 找最近n个高点和低点
+        high_points = []
+        low_points = []
+        
+        for i in range(n, len(df) - n):
+            # 高点判断
+            is_high = all(highs[i] > highs[i-j] for j in range(1, n+1)) and \
+                     all(highs[i] > highs[i+j] for j in range(1, n+1))
+            if is_high:
+                high_points.append((i, highs[i]))
+            
+            # 低点判断
+            is_low = all(lows[i] < lows[i-j] for j in range(1, n+1)) and \
+                    all(lows[i] < lows[i+j] for j in range(1, n+1))
+            if is_low:
+                low_points.append((i, lows[i]))
+        
+        # 取最近3个高低点
+        recent_highs = high_points[-3:] if len(high_points) >= 3 else high_points
+        recent_lows = low_points[-3:] if len(low_points) >= 3 else low_points
+        
+        # 判断趋势
+        high_trend = "走平"
+        low_trend = "走平"
+        
+        if len(recent_highs) >= 2:
+            high_vals = [h[1] for h in recent_highs]
+            if high_vals[-1] > high_vals[0] * 1.02:
+                high_trend = "上升"
+            elif high_vals[-1] < high_vals[0] * 0.98:
+                high_trend = "下降"
+        
+        if len(recent_lows) >= 2:
+            low_vals = [l[1] for l in recent_lows]
+            if low_vals[-1] > low_vals[0] * 1.02:
+                low_trend = "上升"
+            elif low_vals[-1] < low_vals[0] * 0.98:
+                low_trend = "下降"
+        
+        # 判断结构
+        if high_trend == "上升" and low_trend == "上升":
+            structure = "上升趋势"
+            score = 70
+            signal = "买入"
+        elif high_trend == "下降" and low_trend == "下降":
+            structure = "下降趋势"
+            score = 30
+            signal = "卖出"
+        else:
+            structure = "震荡整理"
+            score = 50
+            signal = "观望"
+        
+        return {
+            "structure": structure,
+            "score": score,
+            "signal": signal,
+            "high_trend": high_trend,
+            "low_trend": low_trend,
+        }
+    except Exception as e:
+        print(f"[ERROR] 高低点结构分析失败({ts_code}): {e}")
+        return {"structure": "未知", "score": 50, "signal": "观望", "high_trend": "走平", "low_trend": "走平"}

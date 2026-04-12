@@ -12,6 +12,7 @@ html{
     --red:#ff5a5a;--red-bg:rgba(255,90,90,.15);--green:#4ade80;--green-bg:rgba(74,222,128,.15);
     --blue:#60a5fa;--blue-bg:rgba(96,165,250,.15);--yellow:#fbbf24;--yellow-bg:rgba(251,191,36,.15);
     --orange:#fb923c;--orange-bg:rgba(251,146,60,.15);
+    --bg-panel:#141824; /* 等同 --bg-secondary，修复模板中 var(--bg-panel) 未定义导致的白色背景 */
     --radius:16px;--radius-sm:12px;
     
     /* 字体大小系统 - 默认(normal) */
@@ -53,6 +54,19 @@ body{
 .header{display:flex;justify-content:space-between;align-items:center;padding:var(--space-md) 0;border-bottom:1px solid var(--border);margin-bottom:var(--space-lg)}
 .header h1{font-size:var(--font-xl);font-weight:700;letter-spacing:-0.5px}.header h1 span{color:var(--blue);margin-right:8px}
 .header-actions{display:flex;gap:var(--space-sm);align-items:center}
+
+/* Header 下拉菜单 */
+.header-menu .dropdown-item:hover{background:var(--bg-hover)}
+
+/* Header 按钮文字（桌面端显示，移动端隐藏） */
+.btn-text{display:inline}
+@media(max-width:768px){
+    .btn-text{display:none}
+    .header h1{font-size:var(--font-lg)}
+    .header h1 span{margin-right:4px}
+    .font-size-toggle{padding:2px}
+    .font-size-btn{padding:4px 8px;font-size:11px}
+}
 
 /* 字体大小切换器 */
 .font-size-toggle{display:flex;align-items:center;gap:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px}
@@ -101,10 +115,11 @@ body{
 .hl-unknown{background:rgba(122,129,153,.15);color:#7a8199;border:1px solid var(--border)}
 
 /* ============================================
-   Tab导航 - 增大点击区域
+   Tab导航 - 增大点击区域 + 移动端横向滚动
    ============================================ */
-.tab-nav{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:var(--space-lg)}
-.tab-btn{padding:14px 28px;border:none;background:transparent;color:var(--text-secondary);font-size:var(--font-md);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;transition:all .2s;display:flex;align-items:center;gap:8px;font-weight:500}
+.tab-nav{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:var(--space-lg);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.tab-nav::-webkit-scrollbar{display:none}
+.tab-btn{padding:14px 28px;border:none;background:transparent;color:var(--text-secondary);font-size:var(--font-md);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;transition:all .2s;display:flex;align-items:center;gap:8px;font-weight:500;flex-shrink:0;white-space:nowrap}
 .tab-btn:hover{color:var(--text-primary)}.tab-btn.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:700}
 .tab-badge{background:var(--red);color:#fff;font-size:var(--font-xs);padding:2px 8px;border-radius:12px;font-weight:700;min-width:24px;text-align:center}
 .tab-content{display:none}.tab-content.active{display:block}
@@ -256,6 +271,12 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 /* ============================================
    响应式适配
    ============================================ */
+/* 平板端 (1024px) */
+@media(max-width:1024px){
+    .charts-grid{grid-template-columns:1fr}
+    .param-grid{grid-template-columns:1fr}
+    .strategy-selector{grid-template-columns:1fr}
+}
 @media(max-width:768px){
     .container{padding:var(--space-md)}
     .header{flex-direction:column;gap:var(--space-md);align-items:flex-start}
@@ -274,6 +295,420 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 @media(max-width:480px){
     .summary-grid,.stats-grid{grid-template-columns:1fr 1fr}
     .form-row{grid-template-columns:1fr}
+}
+
+/* 复盘明细表格横向滚动容器 */
+.review-trades-wrapper{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* 持仓操作按钮 - 确保最小点击区域 */
+.actions .btn-xs{min-height:36px!important;padding:8px 12px!important;font-size:var(--font-xs)!important}
+
+/* ============================================
+   财务面板优化样式 - v2.0
+   ============================================ */
+
+/* 财务面板专用设计令牌 */
+.finance-modal{
+    --finance-positive: #10b981;
+    --finance-warning: #f59e0b;
+    --finance-danger: #ef4444;
+    --finance-neutral: #6b7280;
+    --finance-highlight: #3b82f6;
+    --finance-bg: var(--bg-card);
+    --finance-border: var(--border);
+    --finance-radius: 12px;
+    --finance-gap-xs: 4px;
+    --finance-gap-sm: 8px;
+    --finance-gap-md: 12px;
+    --finance-gap-lg: 16px;
+    --finance-gap-xl: 24px;
+    --finance-title: 18px;
+    --finance-section: 14px;
+    --finance-value: 28px;
+    --finance-label: 12px;
+    --finance-caption: 11px;
+}
+
+/* 健康评分区域 */
+.finance-health{
+    background: linear-gradient(135deg, rgba(59,130,246,0.08), rgba(139,92,246,0.08));
+    border-radius: var(--finance-radius);
+    padding: var(--finance-gap-lg);
+    border: 1px solid rgba(59,130,246,0.15);
+}
+
+.finance-health-main{
+    text-align: center;
+    margin-bottom: var(--finance-gap-md);
+}
+
+.finance-health-score{
+    font-size: 48px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    line-height: 1.1;
+    margin-bottom: var(--finance-gap-xs);
+}
+
+.finance-health-level{
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: var(--finance-label);
+    font-weight: 600;
+    background: var(--bg-body);
+}
+
+.finance-health-level.excellent{color: var(--finance-positive); background: rgba(16,185,129,0.15);}
+.finance-health-level.good{color: var(--finance-highlight); background: rgba(59,130,246,0.15);}
+.finance-health-level.average{color: var(--finance-warning); background: rgba(245,158,11,0.15);}
+.finance-health-level.poor{color: var(--finance-danger); background: rgba(239,68,68,0.15);}
+
+/* 评分维度条 */
+.finance-dimensions{display: flex; flex-direction: column; gap: var(--finance-gap-sm);}
+.finance-dimension{display: flex; align-items: center; gap: var(--finance-gap-sm);}
+.finance-dimension-name{
+    font-size: var(--finance-caption);
+    color: var(--text-secondary);
+    width: 56px;
+    flex-shrink: 0;
+}
+.finance-dimension-bar{
+    flex: 1;
+    height: 5px;
+    background: var(--bg-body);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.finance-dimension-fill{
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.finance-dimension-fill.profit{background: linear-gradient(90deg, #10b981, #34d399);}
+.finance-dimension-fill.efficiency{background: linear-gradient(90deg, #3b82f6, #60a5fa);}
+.finance-dimension-fill.safety{background: linear-gradient(90deg, #f59e0b, #fbbf24);}
+.finance-dimension-fill.growth{background: linear-gradient(90deg, #8b5cf6, #a78bfa);}
+
+.finance-dimension-score{
+    font-size: var(--finance-caption);
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 36px;
+    text-align: right;
+}
+
+/* 核心指标卡片 */
+.finance-kpis{display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--finance-gap-md);}
+.finance-kpi{
+    background: var(--finance-bg);
+    border-radius: var(--finance-radius);
+    padding: var(--finance-gap-lg);
+    border: 1px solid var(--finance-border);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.finance-kpi::before{
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+.finance-kpi:hover{
+    transform: translateY(-3px);
+    box-shadow: 0 12px 28px rgba(0,0,0,0.25);
+    border-color: rgba(59,130,246,0.3);
+}
+
+.finance-kpi:hover::before{width: 6px;}
+
+.finance-kpi.pe::before{background: linear-gradient(180deg, #3b82f6, #60a5fa);}
+.finance-kpi.roe::before{background: linear-gradient(180deg, #ef4444, #f87171);}
+.finance-kpi.dividend::before{background: linear-gradient(180deg, #10b981, #34d399);}
+.finance-kpi.pb::before{background: linear-gradient(180deg, #8b5cf6, #a78bfa);}
+.finance-kpi.margin::before{background: linear-gradient(180deg, #f59e0b, #fbbf24);}
+.finance-kpi.debt::before{background: linear-gradient(180deg, #ec4899, #f472b6);}
+
+.finance-kpi-label{
+    font-size: var(--finance-label);
+    color: var(--text-muted);
+    margin-bottom: var(--finance-gap-xs);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.finance-kpi-value{
+    font-size: var(--finance-value);
+    font-weight: 700;
+    margin: var(--finance-gap-xs) 0;
+    line-height: 1.2;
+}
+
+.finance-kpi-tag{
+    font-size: var(--finance-caption);
+    padding: 3px 10px;
+    border-radius: 4px;
+    display: inline-block;
+    font-weight: 500;
+}
+
+.finance-kpi-tag.positive{background: rgba(16,185,129,0.15); color: var(--finance-positive);}
+.finance-kpi-tag.neutral{background: rgba(245,158,11,0.15); color: var(--finance-warning);}
+.finance-kpi-tag.negative{background: rgba(239,68,68,0.15); color: var(--finance-danger);}
+
+/* 次要指标 */
+.finance-kpi-secondary{display: flex; justify-content: space-between; align-items: center; padding: var(--finance-gap-sm) 0;}
+.finance-kpi-secondary .label{display: flex; align-items: center; gap: 6px; font-size: var(--finance-label); color: var(--text-secondary); white-space: nowrap;}
+.finance-kpi-secondary .dot{width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;}
+.finance-kpi-secondary .value{font-size: var(--finance-section); font-weight: 600; white-space: nowrap;}
+
+/* 趋势图区域 */
+.finance-charts{display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--finance-gap-md);}
+.finance-chart{
+    background: var(--finance-bg);
+    border-radius: var(--finance-radius);
+    padding: var(--finance-gap-md);
+    border: 1px solid var(--finance-border);
+    min-height: 150px;
+}
+.finance-chart>div[id$="Chart"]{width: 100% !important;}
+
+.finance-chart-title{
+    font-size: var(--finance-label);
+    color: var(--text-muted);
+    margin-bottom: var(--finance-gap-sm);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.finance-chart-title span{
+    font-size: var(--finance-caption);
+    color: var(--text-secondary);
+    background: var(--bg-body);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+/* Tab切换 */
+.finance-tabs{display: flex; gap: var(--finance-gap-sm); margin-bottom: var(--finance-gap-lg); border-bottom: 1px solid var(--finance-border); padding-bottom: var(--finance-gap-md);}
+.finance-tab{
+    padding: 10px 18px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--finance-label);
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+}
+
+.finance-tab:hover{color: var(--text-primary); background: var(--bg-hover);}
+.finance-tab.active{color: var(--finance-highlight); background: rgba(59,130,246,0.1);}
+
+/* 财务表格优化 */
+.finance-table{width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--finance-label);}
+.finance-table th{
+    background: var(--bg-panel);
+    padding: var(--finance-gap-sm) var(--finance-gap-md);
+    font-weight: 600;
+    text-align: left;
+    border-bottom: 1px solid var(--finance-border);
+    color: var(--text-secondary);
+    font-size: var(--finance-caption);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.finance-table td{
+    padding: var(--finance-gap-sm) var(--finance-gap-md);
+    border-bottom: 1px solid var(--finance-border);
+    transition: background 0.15s ease;
+}
+
+.finance-table tr:hover td{background: var(--bg-hover);}
+.finance-table tr:last-child td{border-bottom: none;}
+
+/* 工具提示 */
+.finance-tooltip{position: relative;}
+.finance-tooltip:hover::after{
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--finance-border);
+    border-radius: 8px;
+    font-size: var(--finance-caption);
+    white-space: nowrap;
+    z-index: 1000;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+    color: var(--text-primary);
+    max-width: 280px;
+    white-space: normal;
+    line-height: 1.5;
+}
+
+.finance-tooltip:hover::before{
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 3px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--finance-border);
+    z-index: 1000;
+}
+
+/* 信息图标 */
+.finance-info-icon{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--bg-hover);
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: help;
+    transition: all 0.2s;
+}
+
+.finance-info-icon:hover{
+    background: var(--finance-highlight);
+    color: #fff;
+}
+
+/* 动画效果 */
+@keyframes financeFadeIn{
+    from{opacity: 0; transform: translateY(10px);}
+    to{opacity: 1; transform: translateY(0);}
+}
+
+.finance-animate-in{animation: financeFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);}
+
+/* 数字滚动动画 */
+@keyframes countUp{
+    from{opacity: 0; transform: translateY(10px);}
+    to{opacity: 1; transform: translateY(0);}
+}
+
+.finance-number-animate{animation: countUp 0.5s ease-out;}
+
+/* 响应式适配 */
+@media(max-width: 768px){
+    .finance-kpis{grid-template-columns: repeat(2, 1fr);}
+    .finance-charts{grid-template-columns: 1fr;}
+    .finance-health-score{font-size: 36px;}
+    .finance-kpi-value{font-size: 22px;}
+}
+
+@media(max-width: 480px){
+    .finance-kpis{grid-template-columns: 1fr;}
+    .finance-health{padding: var(--finance-gap-md);}
+    .finance-tabs{flex-wrap: wrap;}
+    .finance-tab{padding: 8px 12px; font-size: var(--finance-caption);}
+}
+
+/* ============================================
+   选股结果表格 - 精简5列+展开行设计
+   ============================================ */
+.screen-table-wrapper{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.screen-table{width:100%;border-collapse:separate;border-spacing:0}
+.screen-table th{padding:12px 8px;font-size:var(--font-sm);font-weight:600;color:var(--text-secondary);border-bottom:1px solid var(--border);white-space:nowrap}
+.screen-table td{padding:0;border-bottom:1px solid var(--border)}
+
+/* 主行样式 */
+.screen-row{cursor:pointer;transition:all .2s;background:var(--bg-card)}
+.screen-row:hover{background:var(--bg-hover)}
+.screen-row-hot{border-left:3px solid var(--red)}
+.screen-row-expanded{border-bottom:none}
+.screen-row>td{padding:14px 8px;vertical-align:middle}
+
+/* 排名 */
+.screen-rank{font-size:var(--font-sm);font-weight:600}
+.screen-rank.hot{color:var(--red)}
+.screen-rank.normal{color:var(--text-secondary)}
+
+/* 股票信息 */
+.screen-stock{display:flex;flex-direction:column;gap:4px}
+.screen-stock .stock-name{font-size:var(--font-base);font-weight:600;color:var(--text-primary)}
+.screen-stock .stock-code{font-size:var(--font-xs);color:var(--text-muted)}
+.screen-sector-tag{display:inline-block;width:fit-content;padding:2px 8px;border-radius:4px;font-size:11px;margin-top:4px}
+.screen-sector-tag.hot{background:var(--red-bg);color:var(--red)}
+.screen-sector-tag.normal{background:var(--yellow-bg);color:var(--yellow)}
+
+/* 价格区域 */
+.screen-price{display:flex;flex-direction:column;gap:2px;align-items:flex-end}
+.screen-price .price{font-size:var(--font-base);font-weight:600;color:var(--text-primary)}
+.screen-price .pct{font-size:var(--font-sm);font-weight:500}
+
+/* 评分 */
+.screen-score{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;font-size:var(--font-lg);font-weight:700}
+.screen-score.hot{background:var(--red-bg);color:var(--red)}
+.screen-score.normal{background:var(--blue-bg);color:var(--blue)}
+
+/* 操作按钮 */
+.screen-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.screen-actions .btn-icon{width:36px;height:36px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%}
+
+/* 展开行详情 */
+.screen-detail-row{background:var(--bg-secondary)}
+.screen-detail-row>td{padding:0;border-bottom:1px solid var(--border)}
+.screen-detail-content{padding:16px 20px;animation:slideDown .25s ease}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+
+.screen-detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+@media(max-width:900px){.screen-detail-grid{grid-template-columns:1fr}}
+
+.detail-section{background:var(--bg-card);border-radius:var(--radius-sm);padding:16px;border:1px solid var(--border)}
+.detail-title{font-size:var(--font-sm);font-weight:600;color:var(--text-secondary);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+
+/* 评分明细 */
+.detail-scores{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.score-item{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg-hover);border-radius:6px}
+.score-label{font-size:var(--font-xs);color:var(--text-muted)}
+.score-value{font-size:var(--font-sm);font-weight:600;color:var(--text-primary);font-variant-numeric:tabular-nums}
+
+/* 信息行 */
+.detail-info{display:flex;flex-direction:column;gap:10px}
+.info-row{display:flex;justify-content:space-between;align-items:center}
+.info-label{font-size:var(--font-xs);color:var(--text-muted)}
+.info-value{font-size:var(--font-sm);font-weight:500}
+
+/* 加分标签 */
+.detail-bonus-tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
+.detail-bonus-tags .bonus-tag{background:var(--bg-hover);color:var(--text-secondary);padding:4px 12px;border-radius:12px;font-size:var(--font-xs)}
+
+/* 选股表格移动端适配 */
+@media(max-width:640px){
+    .screen-table th:nth-child(4),.screen-table td:nth-child(4){display:none}
+    .screen-detail-grid{gap:12px}
+    .detail-section{padding:12px}
+    .detail-scores{grid-template-columns:1fr}
+}
+@media(max-width:480px){
+    .screen-table th,.screen-table td{padding:12px 6px}
+    .screen-actions{flex-direction:column;gap:6px}
+    .screen-actions .btn-xs{font-size:11px;padding:6px 10px}
+    .screen-score{width:36px;height:36px;font-size:var(--font-base)}
 }
 
 /* ============================================
