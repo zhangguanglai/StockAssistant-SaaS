@@ -4,13 +4,12 @@ helpers.py - 共享辅助函数
 从 server.py 提取出来的公共工具函数，供各 Blueprint 模块复用
 """
 
+import json
+import os
 import threading
-from datetime import datetime, time, timedelta
+import time as _time  # 系统time模块，用于time.time()等
+from datetime import datetime, timedelta, time as dtime
 from functools import lru_cache
-
-import pandas as pd
-import requests
-import tushare as ts
 
 from config import (
     TUSHARE_TOKEN,
@@ -19,11 +18,56 @@ from config import (
 )
 
 # ============================================================
-# Tushare API 实例
+# 延迟导入：pandas / requests / tushare 在首次使用时才加载
+# 目的：将启动时间从 ~0.69s 降低到 <0.1s（跳过重型依赖）
 # ============================================================
 
-ts.set_token(TUSHARE_TOKEN)
-pro = ts.pro_api()
+_pd = None
+_requests = None
+_ts = None
+_pro = None
+
+
+def _get_pd():
+    """延迟获取 pandas"""
+    global _pd
+    if _pd is None:
+        import pandas as pd
+        _pd = pd
+    return _pd
+
+
+def _get_requests():
+    """延迟获取 requests"""
+    global _requests
+    if _requests is None:
+        import requests
+        _requests = requests
+    return _requests
+
+
+def _get_pro():
+    """延迟初始化 Tushare Pro API 实例（仅首次调用时连接）"""
+    global _ts, _pro
+    if _pro is None:
+        import tushare as ts
+        _ts = ts
+        ts.set_token(TUSHARE_TOKEN)
+        _pro = ts.pro_api()
+    return _pro
+
+
+class _TushareProxy:
+    """延迟代理：允许 from helpers import pro，实际使用时才初始化 Tushare"""
+    def __getattr__(self, name):
+        return getattr(_get_pro(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_pro()(*args, **kwargs)
+
+
+# 模块级兼容属性：from helpers import pro 可用，首次访问时自动初始化
+pro = _TushareProxy()
 
 # ============================================================
 # 内存缓存（TTL Cache）
@@ -83,10 +127,10 @@ def is_trade_time():
     if now.weekday() >= 5:
         return False
     t = now.time()
-    morning = time.fromisoformat(TRADE_MORNING_START)
-    morning_end = time.fromisoformat(TRADE_MORNING_END)
-    afternoon = time.fromisoformat(TRADE_AFTERNOON_START)
-    afternoon_end = time.fromisoformat(TRADE_AFTERNOON_END)
+    morning = dtime.fromisoformat(TRADE_MORNING_START)
+    morning_end = dtime.fromisoformat(TRADE_MORNING_END)
+    afternoon = dtime.fromisoformat(TRADE_AFTERNOON_START)
+    afternoon_end = dtime.fromisoformat(TRADE_AFTERNOON_END)
     return (morning <= t <= morning_end) or (afternoon <= t <= afternoon_end)
 
 
@@ -100,26 +144,68 @@ def should_use_realtime_source():
     if now.weekday() >= 5:
         return False
     t = now.time()
-    market_open = time.fromisoformat(TRADE_MORNING_START)
+    market_open = dtime.fromisoformat(TRADE_MORNING_START)
     return t >= market_open  # 9:15 ~ 23:59 工作日都走东方财富
 
 
+STOCK_LIST_CACHE_FILE = os.path.join(os.path.dirname(__file__), "data", "stock_list_cache.json")
+STOCK_LIST_CACHE_TTL = 24 * 3600  # 缓存24小时
+
 def load_stock_list():
-    """加载并缓存股票列表（Tushare stock_basic）"""
+    """加载并缓存股票列表（Tushare stock_basic），优先使用本地缓存"""
     global _stock_list_cache, _stock_list_loaded
     if _stock_list_loaded:
         return _stock_list_cache
     with _stock_list_lock:
         if _stock_list_loaded:
             return _stock_list_cache
+        
+        # 1. 尝试从本地缓存文件加载
         try:
-            df = pro.stock_basic(exchange="", list_status="L",
+            if os.path.exists(STOCK_LIST_CACHE_FILE):
+                cache_mtime = os.path.getmtime(STOCK_LIST_CACHE_FILE)
+                if _time.time() - cache_mtime < STOCK_LIST_CACHE_TTL:
+                    with open(STOCK_LIST_CACHE_FILE, 'r', encoding='utf-8') as f:
+                        _stock_list_cache = json.load(f)
+                        _stock_list_loaded = True
+                        print(f"[INFO] 从本地缓存加载股票列表: {len(_stock_list_cache)} 只")
+                        return _stock_list_cache
+        except Exception as e:
+            print(f"[WARN] 读取本地缓存失败: {e}")
+        
+        # 2. 从Tushare API获取
+        try:
+            print("[INFO] 从Tushare API获取股票列表...")
+            start = _time.time()
+
+            df = _get_pro().stock_basic(exchange="", list_status="L",
                                  fields="ts_code,symbol,name,area,industry,market,list_date")
             _stock_list_cache = df.to_dict("records")
             _stock_list_loaded = True
+            print(f"[INFO] 成功加载 {len(_stock_list_cache)} 只股票，耗时 {_time.time()-start:.2f}s")
+            
+            # 3. 保存到本地缓存
+            try:
+                os.makedirs(os.path.dirname(STOCK_LIST_CACHE_FILE), exist_ok=True)
+                with open(STOCK_LIST_CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(_stock_list_cache, f, ensure_ascii=False)
+                print(f"[INFO] 股票列表已缓存到本地")
+            except Exception as e:
+                print(f"[WARN] 保存本地缓存失败: {e}")
+            
             return _stock_list_cache
         except Exception as e:
             print(f"[ERROR] 加载股票列表失败: {e}")
+            # 4. 如果API失败但有旧缓存，使用旧缓存
+            try:
+                if os.path.exists(STOCK_LIST_CACHE_FILE):
+                    with open(STOCK_LIST_CACHE_FILE, 'r', encoding='utf-8') as f:
+                        _stock_list_cache = json.load(f)
+                        _stock_list_loaded = True
+                        print(f"[WARN] 使用过期缓存: {len(_stock_list_cache)} 只")
+                        return _stock_list_cache
+            except:
+                pass
             return []
 
 
@@ -148,7 +234,24 @@ def calc_position_meta(position):
         "total_volume": total_volume,
         "total_cost": round(total_cost, 2),
         "sell_volume": sell_volume,
+        # 持仓天数：取最早一笔买入日期
+        "first_buy_date": None,
+        "hold_days": 0,
     }
+    # 计算首次买入日期和持有天数
+    buy_trades = [t for t in trades if t.get("trade_type") == "buy"]
+    if buy_trades:
+        dates = [t.get("buy_date", "") for t in buy_trades if t.get("buy_date")]
+        if dates:
+            # 取最早的买入日期
+            first_date = min(dates)
+            try:
+                from datetime import datetime as _dt
+                first_dt = _dt.strptime(first_date[:10], "%Y-%m-%d") if len(first_date) >= 10 else _dt.strptime(first_date, "%Y-%m-%d")
+                position["meta"]["first_buy_date"] = first_dt.strftime("%Y-%m-%d")
+                position["meta"]["hold_days"] = max(0, (_dt.now() - first_dt).days)
+            except (ValueError, TypeError):
+                position["meta"]["first_buy_date"] = dates[0][:10] if len(dates[0]) >= 10 else ""
 
 
 # ============================================================
@@ -192,7 +295,7 @@ def get_realtime_quotes_eastmoney(codes, use_cache=True):
     }
 
     try:
-        resp = requests.get(url, params=params, timeout=8)
+        resp = _get_requests().get(url, params=params, timeout=8)
         resp.raise_for_status()
         data = resp.json()
         result = {}
@@ -259,7 +362,7 @@ def get_realtime_quotes_sina(codes, use_cache=True):
     headers = {"Referer": "https://finance.sina.com.cn"}
 
     try:
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = _get_requests().get(url, headers=headers, timeout=8)
         resp.raise_for_status()
         text = resp.text
 
@@ -385,7 +488,7 @@ def get_tushare_daily(ts_code, trade_date=None):
             params["trade_date"] = trade_date
         else:
             params["end_date"] = datetime.now().strftime("%Y%m%d")
-        df = pro.daily(**params)
+        df = _get_pro().daily(**params)
         if df.empty:
             return None
         row = df.iloc[0]
@@ -439,17 +542,55 @@ def enrich_positions(positions):
 
         today_profit = round((current_price - pre_close) * total_volume, 2) if (current_price and pre_close) else 0
 
-        alerts = []
-        stop_loss = p.get("stop_loss")
-        stop_profit = p.get("stop_profit")
-        if stop_loss and current_price > 0 and current_price <= stop_loss:
-            alerts.append({"type": "stop_loss", "message": f"已触发止损价 ¥{stop_loss}", "level": "danger"})
-        if stop_profit and current_price > 0 and current_price >= stop_profit:
-            alerts.append({"type": "stop_profit", "message": f"已触达止盈价 ¥{stop_profit}", "level": "warning"})
-        if stop_loss and current_price > 0 and current_price > stop_loss:
-            distance = (current_price - stop_loss) / current_price * 100
-            if distance <= 10:
-                alerts.append({"type": "near_stop_loss", "message": f"距止损价 ¥{stop_loss} 仅 {distance:.1f}%", "level": "caution"})
+        # ── 获取技术面数据（用于放量破位等高级预警）──
+        ma20_val = None
+        ma60_val = None
+        vol_ratio_val = None
+        sector_name = info.get("industry", "")
+        sector_chg = 0
+        try:
+            ts_code = p["ts_code"]
+            end_dt = datetime.now().strftime("%Y%m%d")
+            df_tech = pro.daily(ts_code=ts_code, end_date=end_dt, limit=65)
+            if len(df_tech) >= 20:
+                closes = df_tech["close"].tolist()
+                vols = df_tech["vol"].tolist()
+                ma20_val = round(sum(closes[-20:]) / 20, 3)
+                if len(closes) >= 60:
+                    ma60_val = round(sum(closes[-60:]) / 60, 3)
+                # 量比: 当日成交量 / 近5日均量
+                if len(vols) >= 6:
+                    ma5_vol = sum(vols[-6:-1]) / 5
+                    vol_ratio_val = round(vols[-1] / ma5_vol, 2) if ma5_vol > 0 else 1.0
+
+            # ── 板块涨跌幅（申万行业）──
+            try:
+                df_sw = pro.sw_daily(trade_date=end_dt, fields="ts_code,name,pct_chg")
+                if not df_sw.empty:
+                    sw_name = info.get("industry", "")
+                    sw_match = df_sw[df_sw["name"].str.contains(sw_name, na=False)]
+                    if not sw_match.empty:
+                        sector_chg = float(sw_match.iloc[0]["pct_chg"])
+                        sector_name = str(sw_match.iloc[0]["name"])
+            except Exception:
+                pass
+        except Exception as e_tech:
+            print(f"[WARN] 预警技术数据获取失败 {p['ts_code']}: {e_tech}")
+
+        alerts = _generate_smart_alerts(
+            position=p,
+            current_price=current_price,
+            avg_cost=avg_cost,
+            total_volume=total_volume,
+            profit_pct=profit_pct,
+            ma20=ma20_val,
+            ma60=ma60_val,
+            vol_ratio=vol_ratio_val,
+            stop_loss=p.get("stop_loss"),
+            stop_profit=p.get("stop_profit"),
+            sector_name=sector_name,
+            sector_pct_chg=sector_chg,
+        )
 
         result.append({
             "id": p["id"],
@@ -466,6 +607,9 @@ def enrich_positions(positions):
             "profit_pct": profit_pct,
             "today_profit": today_profit,
             "pct_chg": pct_chg,
+            # 持仓天数（从 meta 中取）
+            "hold_days": meta.get("hold_days", 0),
+            "first_buy_date": meta.get("first_buy_date"),
             "open": quote.get("open"),
             "high": quote.get("high"),
             "low": quote.get("low"),
@@ -474,10 +618,173 @@ def enrich_positions(positions):
             "trades": p.get("trades", []),
             "stop_loss": p.get("stop_loss"),
             "stop_profit": p.get("stop_profit"),
-            "alerts": alerts,
+            "alerts": alerts + _generate_smart_alerts(p, current_price, avg_cost, total_volume, profit_pct),
         })
 
     return result
+
+
+def _generate_smart_alerts(position, current_price, avg_cost, total_volume, profit_pct,
+                            ma20=None, ma60=None, vol_ratio=None,
+                            stop_loss=None, stop_profit=None,
+                            sector_name="", sector_pct_chg=0):
+    """
+    智能预警生成器 — 基于多维度数据自动产生投资建议级预警
+    返回 alert 字典列表: [{type, message, level, detail}]
+    最多返回3条（按优先级排序：critical > danger > warning > caution > info）
+
+    v3.4.1 新增参数：
+      ma20/ma60: 均线值（用于放量破位检测）
+      vol_ratio: 量比（当日成交量/MA5成交量）
+      stop_loss/stop_profit: 用户设定的止盈止损价
+      sector_name/sector_pct_chg: 所属板块及涨跌幅（用于板块异动）
+    """
+    alerts = []
+    if not current_price or current_price <= 0:
+        return []
+
+    # ── 0. 止损/止盈触发（最高优先级）──
+    if stop_loss and current_price <= stop_loss:
+        loss_pct = round((current_price - avg_cost) / avg_cost * 100, 1) if avg_cost else 0
+        alerts.append({
+            "type": "stop_loss_triggered",
+            "message": f"🚨 已跌破止损价 ¥{stop_loss}",
+            "level": "critical",
+            "detail": f"当前价¥{current_price}已低于止损线，浮亏{loss_pct}%。建议立即执行卖出或确认是否调整策略"
+        })
+    elif stop_profit and current_price >= stop_profit:
+        alerts.append({
+            "type": "stop_profit_reached",
+            "message": f"已触达止盈价 ¥{stop_profit} 🎯",
+            "level": "info",
+            "detail": "达到目标价位，可根据趋势决定全部兑现或分批减仓"
+        })
+    elif stop_loss and stop_loss > 0:
+        distance = (current_price - stop_loss) / stop_loss * 100
+        if distance <= 10:
+            alerts.append({
+                "type": "near_stop_loss",
+                "message": f"距止损价仅 {distance:.1f}%",
+                "level": "caution",
+                "detail": f"当前距止损位 ¥{stop_loss} 很近，关注后续走势"
+            })
+
+    # ── 1. 深度亏损警报 ─
+    if profit_pct <= -15:
+        alerts.append({
+            "type": "deep_loss",
+            "message": f"深度套牢 {profit_pct:.1f}%（¥{abs(round(profit_pct/100*avg_cost*total_volume,0)):,.0f}）",
+            "level": "danger",
+            "detail": "建议评估是否止损截断或逢低补仓摊低成本"
+        })
+    elif profit_pct <= -8:
+        alerts.append({
+            "type": "moderate_loss",
+            "message": f"中度亏损 {abs(profit_pct):.1f}%，接近止损线",
+            "level": "warning",
+            "detail": "若跌破支撑位可考虑止损"
+        })
+
+    # ── 2. 大幅盈利提醒（提示止盈）─
+    if profit_pct >= 20:
+        alerts.append({
+            "type": "big_profit",
+            "message": f"丰厚盈利 +{profit_pct:.1f}% 🎉，考虑分批止盈",
+            "level": "info",
+            "detail": "落袋为安，可先卖50%锁定利润"
+        })
+    elif profit_pct >= 10:
+        alerts.append({
+            "type": "good_profit",
+            "message": f"稳健盈利 +{profit_pct:.1f}%，关注趋势变化",
+            "level": "info",
+            "detail": "盈利达标，可根据技术面决定持有或减仓"
+        })
+
+    # ── 3. 放量破位检测（新增 v3.4.1）──
+    if ma20 and vol_ratio and current_price < ma20 and vol_ratio > 1.5:
+        below_ma = round((ma20 - current_price) / ma20 * 100, 1)
+        alerts.append({
+            "type": "volume_breakdown",
+            "message": f"⚡ 放量破位！跌穿MA20({below_ma}%↓) 量比{vol_ratio:.1f}",
+            "level": "danger",
+            "detail": f"价格跌破中期均线MA20(¥{ma20})且放量(量比>1.5)，主力出货信号强烈。若不能快速收回需果断离场"
+        })
+    elif ma20 and current_price < ma20 and vol_ratio and vol_ratio > 1.2:
+        below_ma = round((ma20 - current_price) / ma20 * 100, 1)
+        alerts.append({
+            "type": "volume_weak_break",
+            "message": f"温和放量破MA20 ({below_ma}%↓)",
+            "level": "warning",
+            "detail": f"价格在均线下方且有一定放量，趋势转弱信号，建议减仓观察"
+        })
+    elif ma60 and current_price < ma60:
+        below_ma = round((ma60 - current_price) / ma60 * 100, 1)
+        alerts.append({
+            "type": "break_ma60",
+            "message": f"跌破长期均线MA60 ({below_ma}%↓)",
+            "level": "warning",
+            "detail": "价格跌破长期趋势线MA60，中期格局可能转弱"
+        })
+
+    # ── 4. 长期持仓检查 ─
+    meta = position.get("meta", {}) if isinstance(position.get("meta"), dict) else {}
+    hold_days = meta.get("hold_days", 0)
+    if hold_days > 90:
+        alerts.append({
+            "type": "long_hold",
+            "message": f"已持有{hold_days}天（{hold_days//30}个月+）",
+            "level": "info",
+            "detail": "长期持仓需定期复盘基本面和趋势"
+        })
+    elif hold_days > 30 and profit_pct < -5:
+        alerts.append({
+            "type": "stagnant_loss",
+            "message": f"持{hold_days}天仍亏{abs(profit_pct):.0f}%，需审视逻辑",
+            "level": "warning",
+            "detail": "买入逻辑是否仍然有效？"
+        })
+
+    # ── 5. 单日异动检测 ─
+    today_chg = position.get("pct_chg") or 0
+    if today_chg is not None:
+        if today_chg <= -5:
+            alerts.append({
+                "type": "big_drop",
+                "message": f"今日大跌 {today_chg:.1f}% ⚠️",
+                "level": "warning",
+                "detail": "单日暴跌需确认是否有利空消息"
+            })
+        elif today_chg >= 9.5:
+            alerts.append({
+                "type": "big_rally",
+                "message": f"大涨接近涨停 +{today_chg:.1f}% 🔥",
+                "level": "info",
+                "detail": "强势拉升注意是否放量"
+            })
+        elif today_chg <= -3:
+            alerts.append({
+                "type": "noticeable_drop",
+                "message": f"今日下跌 {today_chg:.1f}%",
+                "level": "caution",
+                "detail": "短期回调信号，关注支撑位"
+            })
+
+    # ── 6. 板块异动检测（新增 v3.4.1）──
+    if sector_name and abs(sector_pct_chg) >= 3:
+        direction = "暴涨" if sector_pct_chg > 0 else "暴跌"
+        emoji = "🔥" if sector_pct_chg > 0 else "💧"
+        alerts.append({
+            "type": "sector_anomaly",
+            "message": f"{emoji} 板块异动：{sector_name}{direction}{abs(sector_pct_chg):.1f}%",
+            "level": "caution" if sector_pct_chg < 0 else "info",
+            "detail": f"所属板块今日{'大涨' if sector_pct_chg > 0 else '大跌'}{abs(sector_pct_chg):.1f}%，注意板块轮动风险/机会"
+        })
+
+    # 按优先级排序+限制3条
+    priority_order = {"critical": 0, "danger": 1, "warning": 2, "caution": 3, "info": 4}
+    alerts.sort(key=lambda a: priority_order.get(a["level"], 5))
+    return alerts[:3]
 
 
 # ============================================================
@@ -509,7 +816,7 @@ def get_index_quotes():
         "secids": ",".join(secids),
     }
     try:
-        resp = requests.get(url, params=params, timeout=8)
+        resp = _get_requests().get(url, params=params, timeout=8)
         resp.raise_for_status()
         data = resp.json()
         items = data.get("data", {}).get("diff", [])
@@ -543,7 +850,7 @@ def get_index_quotes():
         sina_codes = [f"{c.split('.')[1].lower()}{c[:6]}" for c in index_codes]
         sina_url = f"http://hq.sinajs.cn/list={','.join(sina_codes)}"
         headers = {"Referer": "https://finance.sina.com.cn"}
-        resp = requests.get(sina_url, headers=headers, timeout=8)
+        resp = _get_requests().get(sina_url, headers=headers, timeout=8)
         resp.raise_for_status()
 
         result = {}
@@ -623,14 +930,14 @@ def get_adj_factor(ts_code, start_date=None, end_date=None):
             params["end_date"] = end_date
         else:
             params["end_date"] = datetime.now().strftime("%Y%m%d")
-        df = pro.adj_factor(**params)
+        df = _get_pro().adj_factor(**params)
         if df.empty:
-            return pd.DataFrame()
+            return _get_pd().DataFrame()
         df = df.sort_values("trade_date")
         return df[["trade_date", "adj_factor"]]
     except Exception as e:
         print(f"[ERROR] 获取复权因子失败({ts_code}): {e}")
-        return pd.DataFrame()
+        return _get_pd().DataFrame()
 
 
 def adjust_kline_by_adj_factor(kline_df, adj_df):
@@ -684,7 +991,7 @@ def get_st_stocks(trade_date=None):
 
     try:
         # 查询所有ST记录，过滤到指定日期有效
-        df = pro.stock_st(fields="ts_code,trade_date")
+        df = _get_pro().stock_st(fields="ts_code,trade_date")
         if df.empty:
             return set()
         # 只取 trade_date <= 目标日期 的最新状态
@@ -736,7 +1043,7 @@ def get_suspended_stocks(trade_date=None):
         return cached
 
     try:
-        df = pro.suspend_d(trade_date=trade_date, fields="ts_code,trade_date")
+        df = _get_pro().suspend_d(trade_date=trade_date, fields="ts_code,trade_date")
         if df.empty:
             return set()
         suspended = set(df["ts_code"].tolist())
@@ -765,7 +1072,7 @@ def get_fina_indicator(ts_code, periods=4):
     if cached is not None:
         return cached
     try:
-        df = pro.fina_indicator(
+        df = _get_pro().fina_indicator(
             ts_code=ts_code,
             fields="ts_code,ann_date,end_date,roe,roa,grossprofit_margin,netprofit_margin,debt_to_assets,"
                    "eps,yoy_eps,yoy_sales,yoy_equity,yoy_asset,yoy_profit,or_yoy,q_sales,q_profit"
@@ -799,7 +1106,7 @@ def get_income_trend(ts_code, periods=8):
     if cached is not None:
         return cached
     try:
-        df = pro.income(
+        df = _get_pro().income(
             ts_code=ts_code,
             fields="ts_code,ann_date,end_date,revenue,total_profit,n_income,n_income_attr_p,yoy_revenue,yoy_net_profit"
         )
@@ -824,7 +1131,7 @@ def get_forecast(ts_code):
     if cached is not None:
         return cached
     try:
-        df = pro.forecast(
+        df = _get_pro().forecast(
             ts_code=ts_code,
             fields="ts_code,ann_date,end_date,type,p_change_min,p_change_max,net_profit_min,net_profit_max,"
                    "summary,exp_date"
@@ -850,7 +1157,7 @@ def get_repurchase(ts_code):
     if cached is not None:
         return cached
     try:
-        df = pro.repurchase(
+        df = _get_pro().repurchase(
             ts_code=ts_code,
             fields="ts_code,ann_date,end_date,proposer,amount,high_price,low_price,status,close_date"
         )
@@ -881,7 +1188,7 @@ def get_limit_list(trade_date=None):
     if cached is not None:
         return cached
     try:
-        df = pro.limit_list_d(
+        df = _get_pro().limit_list_d(
             trade_date=trade_date,
             fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,fd_amount"
         )
@@ -907,7 +1214,7 @@ def get_limit_step(trade_date=None):
     if cached is not None:
         return cached
     try:
-        df = pro.limit_step(
+        df = _get_pro().limit_step(
             trade_date=trade_date,
             fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,days,first_time"
         )
@@ -933,7 +1240,7 @@ def get_limit_cpt_list(trade_date=None):
     if cached is not None:
         return cached
     try:
-        df = pro.limit_cpt_list(
+        df = _get_pro().limit_cpt_list(
             trade_date=trade_date,
             fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,concept"
         )
@@ -962,7 +1269,7 @@ def get_ths_members(ts_code):
     if cached is not None:
         return cached
     try:
-        df = pro.ths_member(
+        df = _get_pro().ths_member(
             ts_code=ts_code,
             fields="ts_code,code,name,in_date,out_date"
         )
@@ -988,7 +1295,7 @@ def get_moneyflow_ind_ths(trade_date=None):
     if cached is not None:
         return cached
     try:
-        df = pro.moneyflow_ind_ths(
+        df = _get_pro().moneyflow_ind_ths(
             trade_date=trade_date,
             fields="ts_code,trade_date,name,close,pct_chg,buy_sm_amount,sell_sm_amount,buy_md_amount,"
                    "sell_md_amount,buy_lg_amount,sell_lg_amount,buy_elg_amount,sell_elg_amount,net_mf_amount"
@@ -1016,7 +1323,7 @@ def get_moneyflow_ind_dc(trade_date=None):
     if cached is not None:
         return cached
     try:
-        df = pro.moneyflow_ind_dc(
+        df = _get_pro().moneyflow_ind_dc(
             trade_date=trade_date,
             fields="ts_code,trade_date,name,close,pct_chg,buy_sm_amount,sell_sm_amount,buy_md_amount,"
                    "sell_md_amount,buy_lg_amount,sell_lg_amount,buy_elg_amount,sell_elg_amount,net_mf_amount"
@@ -1059,7 +1366,7 @@ def get_hl_structure(ts_code, n=5, lookback=60):
         end_date = datetime.now().strftime('%Y%m%d')
         start_date = (datetime.now() - timedelta(days=lookback + 30)).strftime('%Y%m%d')
         
-        df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        df = _get_pro().daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
         if df is None or len(df) < 20:
             return {"structure": "未知", "score": 50, "signal": "观望", "high_trend": "走平", "low_trend": "走平"}
         

@@ -8,7 +8,6 @@ v3.1.1: 修复兼容层写入不删除的问题，改用 database.py 原生 CRUD
 
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
-import pandas as pd
 
 from auth import login_required, get_current_user_id
 from database import (
@@ -645,6 +644,8 @@ def get_price_levels(position_id):
     ]
     if s3:
         supports.append({"label": "S3 成本-5%", "price": s3, "desc": s3_desc, "type": "soft"})
+    # 支撑位按价格升序排列（从低到高，最弱→最强）
+    supports.sort(key=lambda x: (x["price"] or 0))
 
     resistances = [
         {"label": "R1 近30日最高", "price": r1, "desc": r1_desc, "type": "strong"},
@@ -652,6 +653,8 @@ def get_price_levels(position_id):
     ]
     if r3:
         resistances.append({"label": "R3 涨停位", "price": r3, "desc": r3_desc, "type": "soft"})
+    # 压力位按价格降序排列（从高到低，最强→最弱）
+    resistances.sort(key=lambda x: (x["price"] or 0), reverse=True)
 
     return jsonify({
         "ts_code": ts_code,
@@ -661,6 +664,279 @@ def get_price_levels(position_id):
         "ma20": ma20,
         "latest_close": latest_close,
         "calc_basis": f"基于近{len(df)}个交易日K线数据计算",
+    })
+
+
+# ============================================================
+# 卖出智能检查 (v3.4)
+# ============================================================
+
+@position_bp.route("/api/positions/<int:position_id>/sell-check")
+@login_required
+def get_sell_check(position_id):
+    """
+    卖出综合检查 — 返回所有卖出决策需要的辅助数据
+    五维检查: 盈亏状态 / 技术面(4项) / 价格参考位 / 风险警示 / 快捷操作
+    """
+    import pandas as pd
+    from helpers import get_realtime_quotes, get_adj_factor, adjust_kline_by_adj_factor
+    from math import isclose
+
+    user_id = get_current_user_id()
+    pos = get_position(position_id, user_id)
+    if not pos:
+        return jsonify({"error": "持仓不存在"}), 404
+
+    ts_code = pos["ts_code"]
+    trades = get_trades(position_id)
+    buys = [t for t in trades if t["trade_type"] == "buy"]
+    sells = [t for t in trades if t["trade_type"] == "sell"]
+    total_buy_cost = sum(float(t["buy_price"]) * int(t["buy_volume"]) for t in buys)
+    total_buy_vol = sum(int(t["buy_volume"]) for t in buys)
+    sold_vol = sum(int(t["sell_volume"]) for t in sells)
+    hold_vol = total_buy_vol - sold_vol
+    avg_cost = round(total_buy_cost / total_buy_vol, 4) if total_buy_vol > 0 else 0
+    stock_name = pos.get("name", ts_code)
+
+    # --- 获取K线 + 实时行情 ---
+    data_source = "tushare"
+    realtime_price = 0.0
+    try:
+        end_date = datetime.now().strftime("%Y%m%d")
+        df = pro.daily(ts_code=ts_code, end_date=end_date, limit=60)
+        if df.empty:
+            return jsonify({"error": "无法获取K线数据"}), 500
+        df = df.sort_values("trade_date").reset_index(drop=True)
+
+        # 复权处理
+        adj_df = get_adj_factor(ts_code, start_date=df["trade_date"].iloc[0], end_date=end_date)
+        if adj_df is not None:
+            df = adjust_kline_by_adj_factor(df, adj_df)
+
+        # 尝试获取实时价格
+        rt_data = get_realtime_quotes([ts_code])
+        quote = rt_data.get(ts_code, {})
+        rp = float(quote.get("price", 0))
+        if rp > 0:
+            realtime_price = rp
+            data_source = quote.get("_source", "unknown")
+            closes = df["close"].tolist()
+            closes[-1] = rp
+            df.loc[df.index[-1], "close"] = rp
+        else:
+            realtime_price = round(df.iloc[-1]["close"], 2)
+    except Exception as e:
+        return jsonify({"error": f"数据获取失败: {e}"}), 500
+
+    latest = realtime_price
+    profit_pct = round((latest - avg_cost) / avg_cost * 100, 2) if avg_cost > 0 else 0
+    profit_amount = round((latest - avg_cost) * hold_vol, 2)
+
+    # --- 维度一: 盈亏状态检查 ---
+    def classify_profit_level(pct):
+        if pct > 20: return ("big_profit", "丰厚盈利", "#22c55e", f"大赚{pct:.1f}%！🎉 强烈建议分批止盈，落袋为安。会买的是徒弟，会卖的是师傅。", "当前浮盈可观，可分批锁定利润：先卖50%兑现，剩余仓位博更高收益。")
+        elif pct > 10: return ("good_profit", "稳健盈利", "#22c55e", f"盈利{pct:.1f}%✨ 可考虑分批止盈。", "趋势健康时可继续持有；若出现放量下跌信号则获利了结。")
+        elif pct > 3: return ("small_profit", "微利持有", "#eab308", f"微利{pct:.1f}%，趋势向好可继续持有。", "若出现技术面转弱信号，及时获利离场。")
+        elif pct > -3: return ("break_even", "持平观望", "#eab308", f"基本持平（{pct:+.1f}%），正常波动范围。", "不急于卖出，观察后续走势。")
+        elif pct > -8: return ("light_loss", "轻度亏损", "#f97316", f"浮亏{abs(pct):.1f}%，轻度亏损属于正常波动。", "若看好中长期可继续持有；若需要资金可择机减仓，避免扩大亏损。")
+        elif pct > -15: return ("loss", "中度亏损", "#ef4444", f"⚠️ 浮亏{abs(pct):.1f}%，接近止损线。", "如果跌破支撑位(S1/S2)，建议果断止损截断损失。")
+        else: return ("deep_loss", "深度套牢", "#dc2626", f"🔴 深度亏损¥{abs(profit_amount):,.0f}({pct:.1f}%)！卖出即锁定亏损。", "考虑：①是否已触底？②资金是否有更好去处？③是否需要止损？")
+
+    pl_code, pl_label, pl_color, pl_summary, pl_detail = classify_profit_level(profit_pct)
+    profit_check = {"level": pl_code, "label": pl_label, "color": pl_color,
+                    "pct": profit_pct, "amount": profit_amount,
+                    "suggestion": pl_summary, "detail": pl_detail}
+
+    # --- 技术面计算 ---
+    closes = df["close"].tolist()
+    highs = df["high"].tolist()
+    lows = df["low"].tolist()
+    volumes = df["vol"].tolist()
+
+    # MA5/MA20
+    ma5 = round(sum(closes[-5:]) / 5, 2) if len(closes) >= 5 else None
+    ma20_val = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else None
+
+    # 均线排列
+    if ma5 and ma20_val and latest < ma20_val < ma5:
+        ma_signal = "weak_bearish"; ma_label = "多头转弱"; ma_passed = True; ma_sell = False
+    elif ma5 and ma20_val and latest < min(ma5, ma20_val):
+        ma_signal = "bearish"; ma_label = "空头排列"; ma_passed = False; ma_sell = True
+    elif ma5 and ma20_val:
+        ma_signal = "bullish"; ma_label = "多头排列"; ma_passed = True; ma_sell = False
+    else:
+        ma_signal = "unknown"; ma_label = "数据不足"; ma_passed = None; ma_sell = False
+    ma_status = {"signal": ma_signal, "label": ma_label, "ma5": ma5, "ma20": ma20_val,
+                 "passed": ma_passed, "suggest_sell": ma_sell}
+
+    # 量价配合
+    vol_ma5 = sum(volumes[-5:]) / 5 if len(volumes) >= 5 else 1
+    vol_ratio = round(volumes[-1] / vol_ma5, 2) if vol_ma5 > 0 else 1
+    pct_1d = (closes[-1] - closes[-2]) / closes[-2] * 100 if len(closes) >= 2 else 0
+    if vol_ratio > 1.5 and pct_1d < -0.5:
+        vp_signal = "volume_down"; vp_label = "放量下跌"; vp_passed = False; vp_sell = True
+    elif vol_ratio < 0.6 and pct_1d < -0.5:
+        vp_signal = "weak_down"; vp_label = "缩量下跌"; vp_passed = True; vp_sell = False
+    elif vol_ratio > 1.5 and pct_1d > 0.5:
+        vp_signal = "volume_up"; vp_label = "放量上涨"; vp_passed = True; vp_sell = False
+    elif vol_ratio < 0.7:
+        vp_signal = "low_vol"; vp_label = "缩量横盘"; vp_passed = True; vp_sell = False
+    else:
+        vp_signal = "normal"; vp_label = "量价正常"; vp_passed = True; vp_sell = False
+    volume_price = {"signal": vp_signal, "label": vp_label, "vol_ratio": vol_ratio,
+                   "passed": vp_passed, "suggest_sell": vp_sell, "pct_chg": round(pct_1d, 2)}
+
+    # 连续涨跌
+    consec_up = consec_down = 0
+    for i in range(len(closes) - 1, max(0, len(closes) - 10), -1):
+        if i > 0 and closes[i] > closes[i - 1]:
+            consec_up += 1; consec_down = 0
+        elif i > 0 and closes[i] < closes[i - 1]:
+            consec_down += 1; consec_up = 0
+        else:
+            break
+    if consec_up >= 5:
+        cs_signal = "overbought"; cs_label = f"连涨{consec_up}天过热"; cs_passed = False; cs_sell = True
+    elif consec_down >= 5:
+        cs_signal = "oversold"; cs_label = f"连跌{consec_down}天超跌"; cs_passed = True; cs_sell = False
+    elif consec_up >= 3:
+        cs_signal = "strong_up"; cs_label = f"连涨{consec_up}天"; cs_passed = True; cs_sell = False
+    elif consec_down >= 3:
+        cs_signal = "weak_down"; cs_label = f"连跌{consec_down}天"; cs_passed = False; cs_sell = True
+    else:
+        cs_signal = "normal"; cs_label = f"正常(涨{consec_up}/跌{consec_down})"; cs_passed = True; cs_sell = False
+    consecutive = {"days_up": consec_up, "days_down": consec_down,
+                   "signal": cs_signal, "label": cs_label,
+                   "passed": cs_passed, "suggest_sell": cs_sell}
+
+    # 位置分析 (距30日高低点)
+    high_30d = max(highs[-30:]) if len(highs) >= 30 else max(highs)
+    low_30d = min(lows[-30:]) if len(lows) >= 30 else min(lows)
+    dist_to_high = (high_30d - latest) / latest * 100 if latest > 0 else 0
+    dist_to_low = (latest - low_30d) / latest * 100 if latest > 0 else 0
+    if dist_to_low < 3:
+        pa_signal = "near_bottom"; pa_label = f"贴近底部({dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
+    elif dist_to_high < 3:
+        pa_signal = "near_top"; pa_label = f"贴近顶部({dist_to_high:.1f}%)"; pa_passed = False; pa_sell = True
+    elif dist_to_low < 8:
+        pa_signal = "low_area"; pa_label = f"偏低位置({dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
+    elif dist_to_high < 8:
+        pa_signal = "high_area"; pa_label = f"偏高位置({dist_to_high:.1f}%)"; pa_passed = False; pa_sell = False
+    else:
+        pa_signal = "neutral"; pa_label = f"中间位置(高-{dist_to_high:.1f}%/低+{dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
+    position_analysis = {"dist_to_high_pct": round(dist_to_high, 1), "dist_to_low_pct": round(dist_to_low, 1),
+                         "signal": pa_signal, "label": pa_label,
+                         "passed": pa_passed, "suggest_sell": pa_sell}
+
+    # 综合评分 (0-100, 分越高越应该持有不卖)
+    score = 50
+    reasons_list = []
+    if not ma_sell: score += 15; reasons_list.append(f"均线{ma_label}(+15)")
+    else: score -= 10; reasons_list.append(f"均线{ma_label}(-10)")
+    if not vp_sell: score += 15; reasons_list.append(f"量价{vp_label}(+15)")
+    else: score -= 15; reasons_list.append(f"量价{vp_label}(-15)")
+    if not cs_sell: score += 10; reasons_list.append(f"走势{cs_label}(+10)")
+    else: score -= 10; reasons_list.append(f"走势{cs_label}(-10)")
+    if not pa_sell: score += 10; reasons_list.append(f"位置{pa_label}(+10)")
+    else: score -= 5; reasons_list.append(f"位置{pa_label}(-5)")
+
+    score = max(0, min(100, score))
+    if score >= 75: verdict = "hold"; verdict_label = "非紧急卖出时机"
+    elif score >= 50: verdict = "reduce"; verdict_label = "可考虑减仓"
+    elif score >= 25: verdict = "sell"; verdict_label = "建议减仓"
+    else: verdict = "sell_strong"; verdict_label = "建议清仓"
+
+    technical_check = {
+        "ma_status": ma_status,
+        "volume_price": volume_price,
+        "consecutive": consecutive,
+        "position_analysis": position_analysis,
+        "overall": {"score": score, "verdict": verdict, "label": verdict_label,
+                    "summary": f"{verdict_label} (综合评分{score}分)", "reasons": reasons_list}
+    }
+
+    # --- 价格参考位 ---
+    recent_30_lows = lows[-30:] if len(lows) >= 30 else lows
+    s1 = round(min(recent_30_lows), 2)
+    s2 = ma20_val or round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else s1
+    s3 = round(avg_cost * 0.95, 2) if avg_cost else None
+
+    r1 = round(max(highs[-30:]), 2) if len(highs) >= 30 else round(max(highs), 2)
+    r2 = round(s2 * 1.10, 2)
+    r3 = round(latest * 1.10, 2)
+    r4 = round(avg_cost * 1.10, 2) if avg_cost else None
+    r5 = round(avg_cost * 1.20, 2) if avg_cost else None
+
+    supports = [
+        {"label": "S2 MA20均线", "price": s2, "type": "medium", "desc": "中期趋势线，跌破说明趋势转弱"},
+        {"label": "S1 近30日最低", "price": s1, "type": "strong", "desc": "近期强支撑，跌破视为破位"},
+    ]
+    if s3:
+        supports.insert(0, {"label": "S3 成本-5%", "price": s3, "type": "soft", "desc": f"止损底线 ¥{s3}"})
+
+    resistances = [
+        {"label": "R1 近30日最高", "price": r1, "type": "strong", "desc": "激进止盈位"},
+        {"label": "R2 MA20+10%", "price": r2, "type": "medium", "desc": "合理止盈区"},
+        {"label": "R3 现价+10%", "price": r3, "type": "soft", "desc": "涨停极限位"},
+    ]
+    if r4:
+        resistances.append({"label": "R4 成本+10%", "price": r4, "type": "soft", "desc": "标准止盈目标"})
+    if r5:
+        resistances.append({"label": "R5 成本+20%", "price": r5, "type": "soft", "desc": "理想收益目标"})
+    # 支撑位按价格升序排列（从低到高），压力位按价格降序（从高到低）
+    supports.sort(key=lambda x: (x["price"] or 0))
+    resistances.sort(key=lambda x: (x["price"] or 0), reverse=True)
+
+    price_levels = {
+        "resistances": resistances, "supports": supports,
+        "current_price": latest, "ma20": s2,
+        "cost_ref": {"avg_cost": avg_cost, "cost_minus5": s3, "cost_plus10": r4, "cost_plus20": r5},
+        "calc_basis": f"基于近{len(df)}个交易日K线数据计算"
+    }
+
+    # --- 风险警报 ---
+    alerts = []
+    danger_count = 0
+    warning_count = 0
+    if ma_sell and ma_signal == "bearish":
+        alerts.append({"level": "warning", "icon": "📉", "text": f"均线空头排列(MA5<{ma20_val})"})
+        warning_count += 1
+    if vp_sell and vp_signal == "volume_down":
+        alerts.append({"level": "danger", "icon": "📉", "text": f"放量下跌(量比{vol_ratio})，主力出货信号"})
+        danger_count += 1
+    if pl_code in ("deep_loss", "loss"):
+        alerts.append({"level": "danger" if danger_count > 0 else "warning",
+                       "icon": "💸", "text": f"深度亏损({pl_label} {profit_pct:+.1f}%)",
+                       "detail": pl_detail})
+    if cs_sell and cs_signal == "overbought":
+        alerts.append({"level": "notice", "icon": "🔥", "text": f"连续上涨{consec_up}天，短线过热注意回调"})
+    # 三重危险合并
+    if danger_count >= 2 or (danger_count >= 1 and pl_code == "deep_loss"):
+        alerts.insert(0, {"level": "critical", "icon": "🚨",
+                          "text": "多重危险信号叠加！建议立即减仓或清仓控制损失"})
+
+    # --- 快捷操作 ---
+    quick_actions = [
+        {"action": "full_sell", "label": f"全部清仓 ({hold_vol}股)", "volume": hold_vol, "price_hint": "使用现价"},
+        {"action": "half_sell", "label": f"减半卖出 ({hold_vol // 2}股)", "volume": hold_vol // 2, "price_hint": "使用现价"},
+    ]
+
+    return jsonify({
+        "position": {
+            "id": position_id, "ts_code": ts_code, "name": stock_name,
+            "total_volume": hold_vol, "avg_cost": avg_cost,
+            "current_price": latest, "profit_pct": profit_pct,
+            "profit_amount": profit_amount, "market_value": round(hold_vol * latest, 2),
+            "today_pct_chg": round(pct_1d, 2),
+            "stop_loss": pos.get("stop_loss"), "stop_profit": pos.get("stop_profit"),
+        },
+        "profit_check": profit_check,
+        "technical_check": technical_check,
+        "price_levels": price_levels,
+        "risk_alerts": alerts,
+        "quick_actions": quick_actions,
+        "data_source": data_source,
+        "check_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
 
@@ -752,9 +1028,12 @@ def get_position_advice(position_id):
 
     score = 0
     reasons = []
+    # 分项评分（5维度），用于前端展示分解明细
+    scores = {"trend": 0, "profit": 0, "volume_price": 0, "position": 0, "momentum": 0, "structure": 0}
 
     # 1. 趋势分
     score += trend_score * 15
+    scores["trend"] = trend_score * 15
     if trend_score >= 1:
         reasons.append(f"趋势{trend}，均线向上（+{trend_score*15}）")
     elif trend_score <= -1:
@@ -765,43 +1044,56 @@ def get_position_advice(position_id):
     # 2. 盈亏分
     if profit_pct > 20:
         score += 5
+        scores["profit"] = 5
         reasons.append(f"浮盈{profit_pct:.1f}%，获利丰厚但注意回调风险（+5）")
     elif profit_pct > 10:
         score += 15
+        scores["profit"] = 15
         reasons.append(f"浮盈{profit_pct:.1f}%，趋势健康可持有（+15）")
     elif profit_pct > 3:
         score += 20
+        scores["profit"] = 20
         reasons.append(f"浮盈{profit_pct:.1f}%，稳健盈利（+20）")
     elif profit_pct > -3:
         score += 5
+        scores["profit"] = 5
         reasons.append(f"浮盈{profit_pct:.1f}%，微盈/持平观望（+5）")
     elif profit_pct > -8:
         score -= 10
+        scores["profit"] = -10
         reasons.append(f"浮亏{abs(profit_pct):.1f}%，轻度亏损关注支撑（-10）")
     elif profit_pct > -15:
         score -= 20
+        scores["profit"] = -20
         reasons.append(f"浮亏{abs(profit_pct):.1f}%，中度亏损建议止损（-20）")
     else:
         score -= 25
+        scores["profit"] = -25
         reasons.append(f"浮亏{abs(profit_pct):.1f}%，严重亏损强烈建议止损（-25）")
 
     # 3. 量价配合
     if vol_ratio > 1.5 and pct_5d > 0:
         score += 15
+        scores["volume_price"] = 15
         reasons.append(f"放量上涨（量比{vol_ratio:.1f}），动能增强（+15）")
     elif vol_ratio > 1.2 and pct_5d > 0:
         score += 8
+        scores["volume_price"] = 8
         reasons.append(f"温和放量（量比{vol_ratio:.1f}），量价配合（+8）")
     elif vol_ratio < 0.6 and pct_5d < 0:
         score -= 15
+        scores["volume_price"] = -15
         reasons.append(f"缩量下跌（量比{vol_ratio:.1f}），抛压减轻但趋势弱（-15）")
     elif vol_ratio > 1.5 and pct_5d < 0:
         score -= 10
+        scores["volume_price"] = -10
         reasons.append(f"放量下跌（量比{vol_ratio:.1f}），主力出货信号（-10）")
     elif vol_ratio < 0.7:
         score -= 3
+        scores["volume_price"] = -3
         reasons.append(f"缩量（量比{vol_ratio:.1f}），交投清淡（-3）")
     else:
+        scores["volume_price"] = 0
         reasons.append(f"成交量正常（量比{vol_ratio:.1f}）（+0）")
 
     # 4. 距离压力/支撑位
@@ -809,32 +1101,42 @@ def get_position_advice(position_id):
     dist_to_low = (latest - low_30d) / latest * 100
     if dist_to_low < 3:
         score += 10
+        scores["position"] = 10
         reasons.append(f"贴近30日低点（距底部{dist_to_low:.1f}%），安全边际高（+10）")
     elif dist_to_low < 8:
         score += 5
+        scores["position"] = 5
         reasons.append(f"距30日低点{dist_to_low:.1f}%，偏低位置（+5）")
     elif dist_to_high < 3:
         score -= 10
+        scores["position"] = -10
         reasons.append(f"贴近30日高点（距顶部{dist_to_high:.1f}%），阻力区域（-10）")
     elif dist_to_high < 8:
         score -= 5
+        scores["position"] = -5
         reasons.append(f"距30日高点{dist_to_high:.1f}%，偏高位置（-5）")
     else:
+        scores["position"] = 0
         reasons.append(f"距30日高点{dist_to_high:.1f}%，距低点{dist_to_low:.1f}%，中性位置（+0）")
 
-    # 5. 连涨/连跌
+    # 5. 连涨/连跌（动量）
     if consec_up >= 5:
         score -= 10
+        scores["momentum"] = -10
         reasons.append(f"连涨{consec_up}天，短线过热注意回调（-10）")
     elif consec_up >= 3:
         score += 5
+        scores["momentum"] = 5
         reasons.append(f"连涨{consec_up}天，短线强势（+5）")
     elif consec_down >= 5:
         score += 10
+        scores["momentum"] = 10
         reasons.append(f"连跌{consec_down}天，超跌可能反弹（+10）")
     elif consec_down >= 3:
         score -= 5
+        scores["momentum"] = -5
         reasons.append(f"连跌{consec_down}天，趋势偏弱（-5）")
+
 
     # 【新增】6. 高低点结构分析
     hl_structure = {"structure": "unknown", "score": 0, "signal": "无法分析", "recent_highs": [], "recent_lows": []}
@@ -854,18 +1156,22 @@ def get_position_advice(position_id):
         if hl_result["structure"] == "uptrend":
             hl_bonus = 10
             score += hl_bonus
+            scores["structure"] = hl_bonus
             reasons.append(f"高低点结构健康（{hl_result['signal']}）+{hl_bonus}")
         elif hl_result["structure"] == "downtrend":
             hl_penalty = -15
             score += hl_penalty
+            scores["structure"] = hl_penalty
             reasons.append(f"高低点结构恶化（{hl_result['signal']}）{hl_penalty}")
         elif hl_result["high_trend"] == "up":
             hl_bonus = 5
             score += hl_bonus
+            scores["structure"] = hl_bonus
             reasons.append(f"高点突破，趋势转强 +{hl_bonus}")
         elif hl_result["low_trend"] == "down":
             hl_penalty = -8
             score += hl_penalty
+            scores["structure"] = hl_penalty
             reasons.append(f"低点下移，风险增加 {hl_penalty}")
     except Exception as e:
         print(f"[WARN] 高低点结构分析失败: {e}")
@@ -938,6 +1244,7 @@ def get_position_advice(position_id):
     return jsonify({
         "ts_code": ts_code,
         "score": score,
+        "scores": scores,  # 6维度分项分解: trend/profit/volume_price/position/momentum/structure
         "action": action,
         "action_icon": action_icon,
         "action_desc": action_desc,
@@ -1328,6 +1635,8 @@ def run_backtest():
         if not eval_dates:
             return jsonify({"error": "回测日期区间不足"}), 500
 
+        import pandas as pd
+        
         daily_basic_cache = {}
         daily_cache = {}  # 用于获取历史日线数据
 
@@ -1663,12 +1972,14 @@ def check_three_views():
     检查股票的"三看"条件
     返回：高低点抬高、均线多头排列、量价配合的检查结果
     """
+    import pandas as pd
+    
     ts_code = request.args.get("ts_code", "").strip()
     if not ts_code:
         return jsonify({"error": "请提供股票代码"}), 400
 
     try:
-        # 获取最近60天的日线数据
+        # 获取最近60天的日线数据（前复权）
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
 
@@ -1677,6 +1988,20 @@ def check_three_views():
             return jsonify({"error": "数据不足，无法分析"}), 400
 
         df = df.sort_values("trade_date").reset_index(drop=True)
+
+        # 获取前复权因子
+        try:
+            adj_df = pro.adj_factor(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            if not adj_df.empty:
+                adj_df = adj_df.sort_values("trade_date").reset_index(drop=True)
+                df = df.merge(adj_df[["trade_date", "adj_factor"]], on="trade_date", how="left")
+                latest_adj = df["adj_factor"].iloc[-1] if pd.notna(df["adj_factor"].iloc[-1]) else 1.0
+                df["close"] = (df["close"] * df["adj_factor"]) / latest_adj
+                df["high"] = (df["high"] * df["adj_factor"]) / latest_adj
+                df["low"] = (df["low"] * df["adj_factor"]) / latest_adj
+                df["open"] = (df["open"] * df["adj_factor"]) / latest_adj
+        except Exception:
+            pass
 
         # 计算均线
         df["ma5"] = df["close"].rolling(window=5).mean()
@@ -1687,11 +2012,30 @@ def check_three_views():
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else None
 
+        # 获取实时行情替换最新价格
+        data_source = "tushare"
+        realtime_price = 0.0
+        try:
+            rt_data = get_realtime_quotes([ts_code])
+            quote = rt_data.get(ts_code, {})
+            rp = quote.get("price", 0)
+            if rp > 0:
+                realtime_price = rp
+                data_source = quote.get("_source", "unknown")
+                closes = df["close"].tolist()
+                closes[-1] = rp
+                df.loc[df.index[-1], "close"] = rp
+                latest = df.iloc[-1]
+        except Exception as e:
+            print(f"[DEBUG] 三看确认实时行情获取失败: {e}")  # DEBUG
+
         result = {
             "ts_code": ts_code,
             "name": get_stock_info(ts_code).get("name", ""),
             "trade_date": latest["trade_date"],
             "close": round(float(latest["close"]), 3),
+            "realtime_price": round(realtime_price, 3) if realtime_price > 0 else None,
+            "data_source": data_source,
             "checks": {}
         }
 

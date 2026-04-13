@@ -11,7 +11,6 @@ routes/data_bp.py - 市场数据接口路由（P1/P2）
 
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
-import pandas as pd
 
 from auth import login_required
 from helpers import (
@@ -255,6 +254,8 @@ def market_northbound_flow():
         start_date = (datetime.strptime(end_date, "%Y%m%d") -
                       timedelta(days=days + 10)).strftime("%Y%m%d")
 
+        import pandas as pd
+        
         df = pro.moneyflow_hsgt(
             start_date=start_date, end_date=end_date,
             fields="trade_date,ggt_ss,ggt_sz,hgt,sgt,north_money,south_money"

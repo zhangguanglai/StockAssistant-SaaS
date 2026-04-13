@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>A股个人投资助手</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=18">
+    <link rel="stylesheet" href="/static/css/style.css?v=20">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -31,9 +31,13 @@
                 </div>
                 <!-- 刷新按钮（高频操作） -->
                 <button class="btn" @click="refreshData" :disabled="loading" title="刷新数据">
-                    <span :class="['status-dot',summary.is_trade_time?'active':'inactive']"></span>
                     <span class="btn-text">{{loading?'刷新中...':'🔄'}}</span>
                 </button>
+                <!-- 数据源指示器 -->
+                <div class="data-source-indicator" :class="'source-'+indexSource">
+                    <span class="status-dot"></span>
+                    <span>{{indexSource==='sina'?'新浪实时':indexSource==='eastmoney'?'东财实时':indexSource==='tushare'?'Tushare':'--'}}</span>
+                </div>
                 <!-- 更多操作下拉菜单（低频操作） -->
                 <div class="header-dropdown" style="position:relative">
                     <button class="btn" @click="showHeaderMenu=!showHeaderMenu" title="更多">
@@ -50,13 +54,24 @@
         </div>
     </div>
 
-    <!-- Index Bar -->
+    <!-- Index Bar with Market Sentiment -->
     <div class="index-bar">
-        <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);margin-right:8px;flex-shrink:0">
-            <span :class="['status-dot',summary.is_trade_time?'active':'inactive']"></span>
-            <span>{{indexSource==='sina'?'🔴 新浪实时':indexSource==='eastmoney'?'🟢 东财实时':indexSource==='tushare'?'⚪ Tushare':'--'}}</span>
-            <span v-if="indexTime" style="color:var(--text-muted)">{{indexTime}}</span>
+        <!-- 市场情绪卡片（置于最左侧） -->
+        <div class="index-card sentiment-card" v-if="strategyData.market_status">
+            <div>
+                <div class="name">📊 市场情绪</div>
+                <div class="price" :class="strategyData.market_status==='强势上涨'?'text-red':strategyData.market_status==='弱势下跌'?'text-green':'text-yellow'">
+                    {{strategyData.market_status}}
+                </div>
+            </div>
+            <div style="text-align:right">
+                <div class="change" style="font-size:13px;font-weight:600">评分 {{strategyData.score||0}}/100</div>
+                <div class="change" style="color:var(--text-muted);font-size:11px">仓位 {{strategyData.position_suggestion||'--'}}</div>
+                <div class="change" style="color:var(--text-muted);font-size:11px">趋势 {{strategyData.trend_strength||'--'}}</div>
+            </div>
         </div>
+
+        <!-- 三大指数 -->
         <div :class="['index-card', indexSource!=='tushare'?'live':'']" v-for="(idx,code) in indexData" :key="code">
             <div>
                 <div class="name">{{idx.name}}</div>
@@ -73,6 +88,34 @@
         </div>
     </div>
 
+    <!-- 策略建议条 -->
+    <div class="strategy-bar" v-if="strategyData.action_direction">
+        <div class="strategy-bar-content">
+            <span class="strategy-bar-item">
+                <span class="strategy-bar-label">💡 操作方向</span>
+                <span class="strategy-bar-value">{{strategyData.action_direction}}</span>
+            </span>
+            <span class="strategy-bar-divider">|</span>
+            <span class="strategy-bar-item">
+                <span class="strategy-bar-label">🛡️ 止损</span>
+                <span class="strategy-bar-value text-green">{{strategyData.stop_loss||'--'}}</span>
+            </span>
+            <span class="strategy-bar-divider">|</span>
+            <span class="strategy-bar-item">
+                <span class="strategy-bar-label">🎯 止盈</span>
+                <span class="strategy-bar-value text-red">{{strategyData.take_profit||'--'}}</span>
+            </span>
+            <span class="strategy-bar-divider">|</span>
+            <span class="strategy-bar-item strategy-bar-points">
+                <span class="strategy-bar-label">📝 要点</span>
+                <span class="strategy-bar-value">{{strategyData.key_points||'--'}}</span>
+            </span>
+        </div>
+        <button class="strategy-bar-expand" @click="showStrategyDetail=true" title="查看完整策略详情" style="display:none">
+            详情 ▼
+        </button>
+    </div>
+
     <!-- Tab Nav -->
     <div class="tab-nav">
         <button :class="['tab-btn',activeTab==='positions'?'active':'']" @click="activeTab='positions'">📊 持仓<span class="tab-badge" v-if="summary.alert_count>0">{{summary.alert_count}}</span></button>
@@ -80,12 +123,13 @@
         <!-- 暂时隐藏：交易流水 -->
         <!-- <button :class="['tab-btn',activeTab==='tradelog'?'active':'']" @click="switchToTradeLog">📋 交易流水</button> -->
         <button :class="['tab-btn',activeTab==='review'?'active':'']" @click="switchToReview">📝 复盘</button>
-        <button :class="['tab-btn',activeTab==='strategy'?'active':'']" @click="switchToStrategy">🎯 策略</button>
+        <!-- 暂时隐藏：策略、市场（待完善后启用） -->
+        <!-- <button :class="['tab-btn',activeTab==='strategy'?'active':'']" @click="switchToStrategy">🎯 策略</button> -->
         <button :class="['tab-btn',activeTab==='watch'?'active':'']" @click="switchToWatch">👀 自选<span class="tab-badge" v-if="watchListCount>0">{{watchListCount}}</span></button>
-        <!-- 暂时隐藏：对比、统计 -->
+        <!-- 暂时隐藏：对比、统计、市场 -->
         <!-- <button :class="['tab-btn',activeTab==='compare'?'active':'']" @click="switchToCompare">⚖️ 对比</button> -->
         <!-- <button :class="['tab-btn',activeTab==='analysis'?'active':'']" @click="switchToAnalysis">📊 统计</button> -->
-        <button :class="['tab-btn',activeTab==='market'?'active':'']" @click="switchToMarket">🏮 市场</button>
+        <!-- <button :class="['tab-btn',activeTab==='market'?'active':'']" @click="switchToMarket">🏮 市场</button> -->
     </div>
 
     <!-- Tab: 持仓 -->
@@ -128,7 +172,7 @@
         </div>
         <div class="table-wrapper" v-if="positions.length>0">
             <table style="table-layout:auto">
-                <thead><tr><th style="min-width:140px">股票</th><th style="min-width:60px">持仓</th><th style="text-align:right;min-width:70px">成本</th><th style="text-align:right;min-width:60px">现价</th><th style="text-align:right;min-width:80px">盈亏</th><th style="text-align:right;min-width:60px">盈亏%</th><th style="text-align:right;min-width:70px">今日</th><th style="text-align:right;min-width:80px">市值</th><th style="min-width:90px">止损/止盈</th><th style="min-width:120px">操作</th></tr></thead>
+                <thead><tr><th style="min-width:140px">股票</th><th style="min-width:60px">持仓</th><th style="text-align:right;min-width:70px">成本</th><th style="text-align:right;min-width:60px">现价</th><th style="text-align:right;min-width:80px">盈亏</th><th style="text-align:right;min-width:60px">盈亏%</th><th style="text-align:right;min-width:70px">今日</th><th style="text-align:right;min-width:70px">持有天数</th><th style="text-align:right;min-width:80px">市值</th><th style="min-width:100px">预警</th><th style="min-width:120px">操作</th></tr></thead>
                 <tbody>
                     <tr v-for="p in filteredPositions" :key="p.id" :class="{'alert-row':p.alerts?.some(a=>a.level==='danger'),'alert-caution':p.alerts?.some(a=>a.level==='caution')}">
                         <td>
@@ -147,8 +191,39 @@
                         <td style="text-align:right" class="num" :class="p.profit>=0?'text-red':'text-green'">{{p.profit>=0?'+':''}}{{formatNum(p.profit)}}</td>
                         <td style="text-align:right" class="num" :class="(p.profit_pct||0)>=0?'text-red':'text-green'">{{(p.profit_pct||0)>=0?'+':''}}{{(p.profit_pct||0).toFixed(2)}}%</td>
                         <td style="text-align:right" class="num" :class="p.today_profit>=0?'text-red':'text-green'">{{p.today_profit>=0?'+':''}}{{formatNum(p.today_profit)}}</td>
+                        <!-- 持有天数：显示天数 + 买入日期 tooltip -->
+                        <td style="text-align:right;white-space:nowrap">
+                            <span class="num" v-if="p.hold_days > 0"
+                                  :title="'首次买入: '+(p.first_buy_date||'未知')"
+                                  :class="{'text-muted': p.hold_days <= 7, '': p.hold_days <= 30, 'text-blue': p.hold_days > 30, 'text-orange': p.hold_days > 90}">
+                                {{p.hold_days}}天
+                            </span>
+                            <span class="num text-muted" v-else>-</span>
+                        </td>
                         <td style="text-align:right" class="num">¥{{formatNum(p.market_value)}}</td>
-                        <td style="font-size:12px;color:var(--text-muted);white-space:nowrap"><div v-if="p.stop_loss&&p.stop_profit">损{{p.stop_loss}}/盈{{p.stop_profit}}</div><div v-else-if="p.stop_loss">损{{p.stop_loss}}</div><div v-else-if="p.stop_profit">盈{{p.stop_profit}}</div><div v-else>-</div></td>
+                        <!-- 智能预警列（替代原来的止损/止盈） -->
+                        <td style="font-size:12px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis" :title="getAlertsTooltip(p.alerts)">
+                            <!-- 止损/止盈用户设置 -->
+                            <div v-if="p.stop_loss||p.stop_profit" style="color:var(--text-muted);font-size:11px;margin-bottom:2px">
+                                <span v-if="p.stop_loss">损{{p.stop_loss}}</span>
+                                <span v-if="p.stop_loss && p.stop_profit">/</span>
+                                <span v-if="p.stop_profit">盈{{p.stop_profit}}</span>
+                            </div>
+                            <!-- 智能预警标签 -->
+                            <div v-for="(alert, idx) in (p.alerts||[]).slice(0,2)" :key="alert.type"
+                                 style="display:inline-block;margin:1px 2px 1px 0;padding:1px 6px;border-radius:10px;font-size:11px;line-height:1.4"
+                                :class="{
+                                    'smart-alert-critical': alert.level==='critical',
+                                    'smart-alert-danger': alert.level==='danger',
+                                    'smart-alert-warning': alert.level==='warning',
+                                    'smart-alert-caution': alert.level==='caution',
+                                    'smart-alert-info': alert.level==='info'
+                                }"
+                                 :title="(alert.detail||alert.message)">
+                                {{alert.message}}
+                            </div>
+                            <span v-if="(p.alerts||[]).length===0" style="color:var(--text-muted);font-size:11px">-</span>
+                        </td>
                         <td style="white-space:nowrap">
                             <div class="actions" style="display:flex;gap:4px;flex-wrap:nowrap">
                                 <button class="btn btn-xs" @click="openSellModal(p)" title="卖出" style="background:var(--red);color:#fff">卖</button>
@@ -949,394 +1024,12 @@
 </div>
 
 <!-- Tab: 策略中心 -->
-<div :class="['tab-content',activeTab==='strategy'?'active':'']">
-    <!-- 市场环境与仓位建议 - 合并优化 -->
-    <div class="chart-card" style="margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <h3 style="margin:0">🌤️ 市场环境与策略建议</h3>
-        </div>
-        
-        <div v-if="regimeLoading" style="text-align:center;padding:30px;color:var(--text-muted)">⏳ 分析市场数据中...</div>
-        
-        <template v-if="regimeData && !regimeLoading">
-            <!-- 顶部核心指标 -->
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px">
-                <!-- 市场状态 -->
-                <div style="text-align:center;padding:16px;background:linear-gradient(135deg,rgba(59,130,246,0.1),rgba(139,92,246,0.1));border-radius:12px;border:1px solid rgba(59,130,246,0.2)">
-                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">市场状态</div>
-                    <div style="font-size:24px;font-weight:800" :style="{color: regimeData.regime_score>=65?'var(--red)':regimeData.regime_score>=40?'var(--yellow)':'var(--green)'}">{{regimeData.regime}}</div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">评分 {{regimeData.regime_score}}/100</div>
-                </div>
-                <!-- 建议仓位 -->
-                <div style="text-align:center;padding:16px;background:var(--bg-panel);border-radius:12px">
-                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">建议仓位</div>
-                    <div style="font-size:24px;font-weight:800;color:var(--blue)">{{regimeData.strategy.max_position}}</div>
-                    <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">{{regimeData.strategy.style}}</div>
-                </div>
-                <!-- 数据时效（替代重复的上证指数） -->
-                <div style="text-align:center;padding:16px;background:var(--bg-panel);border-radius:12px">
-                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">数据时效</div>
-                    <div style="font-size:18px;font-weight:700;color:var(--text-primary)">
-                        <span v-if="regimeData._source==='eastmoney'" style="color:var(--green)">⚡ 实时</span>
-                        <span v-else-if="regimeData._source==='sina'" style="color:var(--blue)">⚡ 实时</span>
-                        <span v-else style="color:var(--yellow)">📊 收盘</span>
-                    </div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
-                        {{regimeData._source==='eastmoney'?'东方财富':regimeData._source==='sina'?'新浪财经':'Tushare'}}
-                    </div>
-                </div>
-                <!-- 趋势强度 -->
-                <div style="text-align:center;padding:16px;background:var(--bg-panel);border-radius:12px">
-                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">趋势强度</div>
-                    <div style="font-size:20px;font-weight:700" :class="regimeData.indicators.ma20>regimeData.indicators.ma60?'text-red':'text-green'">
-                        {{regimeData.indicators.ma20>regimeData.indicators.ma60?'多头':'空头'}}
-                    </div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">MA20/60</div>
-                </div>
-            </div>
-            
-            <!-- 操作指引 -->
-            <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px">
-                <!-- 左侧：操作建议 -->
-                <div style="padding:16px;background:var(--bg-panel);border-radius:12px">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-                        <span style="font-size:20px">📌</span>
-                        <span style="font-size:15px;font-weight:600">操作方向</span>
-                        <span style="font-size:14px;color:var(--text-secondary)">{{regimeData.strategy.action}}</span>
-                    </div>
-                    <div style="display:flex;gap:20px;margin-bottom:12px">
-                        <div><span style="color:var(--red);font-weight:600">止损: {{regimeData.strategy.stop_loss}}</span></div>
-                        <div><span style="color:var(--green);font-weight:600">止盈: {{regimeData.strategy.take_profit}}</span></div>
-                    </div>
-                    <div style="border-top:1px solid var(--border);padding-top:12px">
-                        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px">💡 要点提醒</div>
-                        <div style="display:flex;flex-wrap:wrap;gap:8px">
-                            <span v-for="(tip,i) in regimeData.strategy.tips" :key="i" style="font-size:12px;padding:4px 10px;background:var(--bg-card);border-radius:6px;color:var(--text-muted)">{{tip}}</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- 右侧：技术指标 -->
-                <div style="padding:16px;background:var(--bg-panel);border-radius:12px">
-                    <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:12px">📊 技术指标</div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px">
-                        <div>
-                            <div style="color:var(--text-muted)">MA20/MA60</div>
-                            <div class="num" style="font-weight:600">{{regimeData.indicators.ma20}} / {{regimeData.indicators.ma60}}</div>
-                        </div>
-                        <div>
-                            <div style="color:var(--text-muted)">20日涨幅</div>
-                            <div :class="regimeData.indicators.pct_20d>=0?'text-red':'text-green'" style="font-weight:600">{{regimeData.indicators.pct_20d>=0?'+':''}}{{regimeData.indicators.pct_20d}}%</div>
-                        </div>
-                        <div>
-                            <div style="color:var(--text-muted)">波动率</div>
-                            <div class="num" style="font-weight:600">{{regimeData.indicators.volatility}}%</div>
-                        </div>
-                        <div>
-                            <div style="color:var(--text-muted)">数据来源</div>
-                            <div style="font-size:11px;color:var(--text-muted)">{{regimeData._source==='sina'?'新浪':regimeData._source==='eastmoney'?'东财':'Tushare'}}</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- 【新增】今日市场速览 - 与市场Tab联动 -->
-            <div v-if="regimeData.market_summary" style="margin-top:20px;padding:16px;background:linear-gradient(135deg,rgba(59,130,246,0.05),rgba(139,92,246,0.05));border-radius:12px;border:1px solid rgba(59,130,246,0.15)">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-                    <span style="font-size:16px">💡</span>
-                    <span style="font-size:14px;font-weight:600;color:var(--text-secondary)">今日市场速览</span>
-                    <span style="font-size:12px;color:var(--text-muted)">(来自 市场 Tab)</span>
-                </div>
-                <div style="display:flex;flex-wrap:wrap;gap:12px">
-                    <!-- 涨停数据 -->
-                    <div v-if="regimeData.market_summary.limit_up_count!==null" 
-                         style="flex:1;min-width:140px;padding:12px;background:var(--bg-card);border-radius:8px;cursor:pointer;transition:all 0.2s"
-                         @click="switchToMarket();marketSubTab='limit';loadLimitList()"
-                         title="点击查看涨停详情">
-                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-                            <span style="font-size:14px">🔴</span>
-                            <span style="font-size:12px;color:var(--text-muted)">涨停</span>
-                        </div>
-                        <div style="font-size:20px;font-weight:700;color:var(--red)">{{regimeData.market_summary.limit_up_count}}<span style="font-size:12px;font-weight:400">只</span></div>
-                        <div style="font-size:11px;color:var(--blue);margin-top:4px">查看详情 →</div>
-                    </div>
-                    
-                    <!-- 北向资金 -->
-                    <div v-if="regimeData.market_summary.northbound_flow!==null" 
-                         style="flex:1;min-width:140px;padding:12px;background:var(--bg-card);border-radius:8px;cursor:pointer;transition:all 0.2s"
-                         @click="switchToMarket();marketSubTab='northbound';loadNorthbound()"
-                         title="点击查看资金流向">
-                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-                            <span style="font-size:14px">🌊</span>
-                            <span style="font-size:12px;color:var(--text-muted)">北向资金</span>
-                        </div>
-                        <div style="font-size:18px;font-weight:700" :class="regimeData.market_summary.northbound_flow>=0?'text-red':'text-green'">
-                            {{regimeData.market_summary.northbound_flow>=0?'+':''}}{{formatNum(regimeData.market_summary.northbound_flow)}}
-                        </div>
-                        <div style="font-size:11px;color:var(--blue);margin-top:4px">查看详情 →</div>
-                    </div>
-                    
-                    <!-- 领涨板块 -->
-                    <div v-if="regimeData.market_summary.top_sectors&&regimeData.market_summary.top_sectors.length>0" 
-                         style="flex:2;min-width:200px;padding:12px;background:var(--bg-card);border-radius:8px;cursor:pointer;transition:all 0.2s"
-                         @click="switchToMarket();marketSubTab='sector_flow';loadSectorFlow()"
-                         title="点击查看板块轮动">
-                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-                            <span style="font-size:14px">📊</span>
-                            <span style="font-size:12px;color:var(--text-muted)">板块资金</span>
-                        </div>
-                        <div style="display:flex;flex-wrap:wrap;gap:8px">
-                            <span v-for="(sector,i) in regimeData.market_summary.top_sectors.slice(0,3)" :key="i" 
-                                  style="font-size:13px;padding:2px 8px;background:var(--bg-panel);border-radius:4px;color:var(--text-secondary)">
-                                {{sector.name}} {{sector.flow>=0?'+':''}}{{formatNum(sector.flow)}}
-                            </span>
-                        </div>
-                        <div style="font-size:11px;color:var(--blue);margin-top:4px">查看板块轮动 →</div>
-                    </div>
-                </div>
-            </div>
-        </template>
-    </div>
-
-    <!-- 选股回测 - 策略联动版 -->
-    <div class="chart-card" style="margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <div>
-                <h3 style="margin:0 0 4px 0">🤖 策略回测验证</h3>
-                <p style="font-size:12px;color:var(--text-muted);margin:0">
-                    当前策略：<span style="color:var(--blue);font-weight:600">{{strategyListSafe[currentStrategy]?strategyListSafe[currentStrategy].name:'趋势突破'}}</span>
-                    <span style="margin:0 8px">|</span>
-                    验证该策略在历史数据中的表现
-                </p>
-            </div>
-            <div style="display:flex;gap:10px;align-items:center">
-                <span style="font-size:13px;color:var(--text-muted)">周期:</span>
-                <select v-model.number="backtestDays" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);font-size:12px">
-                    <option :value="15">15天</option>
-                    <option :value="30">30天</option>
-                    <option :value="60">60天</option>
-                </select>
-                <span style="font-size:13px;color:var(--text-muted)">持有:</span>
-                <select v-model.number="backtestHold" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);font-size:12px">
-                    <option :value="3">3天</option>
-                    <option :value="5">5天</option>
-                    <option :value="10">10天</option>
-                </select>
-                <button class="btn btn-primary btn-sm" @click="runBacktest" :disabled="backtestLoading">{{backtestLoading?'计算中...':'开始回测'}}</button>
-            </div>
-        </div>
-        
-        <div v-if="backtestLoading" style="text-align:center;padding:30px;color:var(--text-muted)">⏳ 回测计算中，请稍候...</div>
-        
-        <template v-if="backtestData && !backtestLoading">
-            <!-- 核心结论 -->
-            <div style="padding:14px 16px;background:linear-gradient(135deg,rgba(59,130,246,0.08),rgba(139,92,246,0.08));border-radius:10px;margin-bottom:16px;border-left:4px solid var(--blue)">
-                <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:6px">回测结论</div>
-                <div style="font-size:13px;color:var(--text-secondary);line-height:1.7">{{backtestData.summary}}</div>
-            </div>
-            
-            <!-- 核心指标 - 精简展示 -->
-            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px">
-                <div style="text-align:center;padding:12px;background:var(--bg-panel);border-radius:10px">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">信号数</div>
-                    <div style="font-size:18px;font-weight:700">{{backtestData.total_signals}}</div>
-                </div>
-                <div style="text-align:center;padding:12px;background:var(--bg-panel);border-radius:10px">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">胜率</div>
-                    <div style="font-size:18px;font-weight:700" :class="backtestData.win_rate>=50?'text-red':'text-green'">{{backtestData.win_rate}}%</div>
-                </div>
-                <div style="text-align:center;padding:12px;background:var(--bg-panel);border-radius:10px">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">平均收益</div>
-                    <div style="font-size:18px;font-weight:700" :class="backtestData.avg_return>=0?'text-red':'text-green'">{{backtestData.avg_return>=0?'+':''}}{{backtestData.avg_return}}%</div>
-                </div>
-                <div style="text-align:center;padding:12px;background:var(--bg-panel);border-radius:10px">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">盈亏比</div>
-                    <div style="font-size:18px;font-weight:700" :class="backtestData.profit_loss_ratio>=2?'text-red':'text-green'">{{backtestData.profit_loss_ratio||'-'}}</div>
-                </div>
-                <div style="text-align:center;padding:12px;background:var(--bg-panel);border-radius:10px">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">最大回撤</div>
-                    <div style="font-size:18px;font-weight:700;text-green">{{backtestData.max_drawdown||0}}%</div>
-                </div>
-                <div style="text-align:center;padding:12px;background:var(--bg-panel);border-radius:10px">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">扫描标的</div>
-                    <div style="font-size:18px;font-weight:700">{{backtestData.screened_total||0}}</div>
-                </div>
-            </div>
-            
-            <!-- 收益分布 -->
-            <div style="display:flex;gap:12px;margin-bottom:16px">
-                <div style="flex:1;padding:12px;background:rgba(239,68,68,0.08);border-radius:10px;text-align:center">
-                    <div style="font-size:11px;color:var(--red);margin-bottom:4px">🏆 最大盈利</div>
-                    <div style="font-size:20px;font-weight:700;color:var(--red)">+{{backtestData.max_return}}%</div>
-                </div>
-                <div style="flex:1;padding:12px;background:rgba(34,197,94,0.08);border-radius:10px;text-align:center">
-                    <div style="font-size:11px;color:var(--green);margin-bottom:4px">💔 最大亏损</div>
-                    <div style="font-size:20px;font-weight:700;color:var(--green)">{{backtestData.max_loss}}%</div>
-                </div>
-            </div>
-            
-            <!-- 交易明细折叠 -->
-            <details v-if="backtestData.trades.length>0" style="background:var(--bg-panel);border-radius:10px;overflow:hidden">
-                <summary style="padding:12px 16px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-secondary);list-style:none;display:flex;justify-content:space-between;align-items:center">
-                    <span>📋 交易明细 ({{backtestData.trades.length}}笔)</span>
-                    <span style="font-size:11px;color:var(--text-muted)">点击展开</span>
-                </summary>
-                <div style="max-height:250px;overflow-y:auto;padding:0 16px 16px">
-                    <table style="width:100%;font-size:12px">
-                        <thead><tr style="color:var(--text-muted)"><th style="text-align:left;padding:8px 6px">日期</th><th style="text-align:left">股票</th><th style="text-align:right">买入</th><th style="text-align:right">卖出</th><th style="text-align:right">收益</th></tr></thead>
-                        <tbody>
-                            <tr v-for="t in backtestData.trades" :key="t.date+t.ts_code" style="border-top:1px solid var(--border)">
-                                <td style="padding:6px">{{t.date}}</td>
-                                <td>{{t.ts_code}}</td>
-                                <td style="text-align:right" class="num">¥{{t.buy_price}}</td>
-                                <td style="text-align:right" class="num">¥{{t.sell_price}}</td>
-                                <td style="text-align:right" :class="t.return_pct>=0?'text-red':'text-green'" class="num">{{t.return_pct>=0?'+':''}}{{t.return_pct}}%</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </details>
-        </template>
-    </div>
-
-    <!-- 策略效果跟踪 (P4-8) - 优化布局 -->
-    <div class="chart-card" style="margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-            <div>
-                <h3 style="margin:0 0 4px 0">📊 策略效果跟踪</h3>
-                <p style="font-size:12px;color:var(--text-muted);margin:0">基于观察池真实数据，验证各策略有效性</p>
-            </div>
-            <button class="btn btn-primary btn-sm" @click="loadStrategyPerformance" :disabled="spLoading">{{spLoading?'分析中...':'🔍 刷新'}}</button>
-        </div>
-
-        <div v-if="spLoading" style="text-align:center;padding:30px;color:var(--text-muted)">⏳ 正在计算各策略表现...</div>
-
-        <template v-if="spData && !spLoading">
-            <!-- 总览指标 - 横向紧凑布局 -->
-            <div style="display:flex;gap:12px;margin-bottom:16px" v-if="spData.total_tracked>0">
-                <div style="flex:1;padding:12px;background:linear-gradient(135deg,rgba(59,130,246,0.1),rgba(139,92,246,0.1));border-radius:10px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-muted)">跟踪总数</div>
-                    <div style="font-size:22px;font-weight:700;color:var(--blue)">{{spData.total_tracked}}</div>
-                </div>
-                <div style="flex:1;padding:12px;background:var(--bg-panel);border-radius:10px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-muted)">综合胜率</div>
-                    <div style="font-size:22px;font-weight:700" :class="spData.overall_win_rate>=50?'text-red':'text-green'">{{spData.overall_win_rate}}%</div>
-                </div>
-                <div style="flex:1;padding:12px;background:var(--bg-panel);border-radius:10px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-muted)">平均收益</div>
-                    <div style="font-size:22px;font-weight:700" :class="spData.overall_avg_chg>=0?'text-red':'text-green'">{{spData.overall_avg_chg>=0?'+':''}}{{spData.overall_avg_chg}}%</div>
-                </div>
-            </div>
-
-            <!-- 策略对比卡片 - 精简版 -->
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-bottom:16px">
-                <div v-for="(ss,key) in spData.strategies" :key="key" style="padding:12px;background:var(--bg-panel);border-radius:10px;border-left:3px solid" :style="{borderColor: ss.win_rate>=50?'var(--red)':'var(--green)'}">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <span style="font-weight:600;font-size:13px">{{ss.display_name}}</span>
-                        <span style="font-size:11px;color:var(--text-muted)">{{ss.count}}只</span>
-                    </div>
-                    <div style="display:flex;gap:16px;font-size:12px">
-                        <div>
-                            <span style="color:var(--text-muted)">胜率</span>
-                            <span style="font-size:16px;font-weight:700;margin-left:6px" :class="ss.win_rate>=50?'text-red':'text-green'">{{ss.win_rate}}%</span>
-                        </div>
-                        <div>
-                            <span style="color:var(--text-muted)">均收益</span>
-                            <span style="font-size:16px;font-weight:700;margin-left:6px" :class="ss.avg_chg>=0?'text-red':'text-green'">{{ss.avg_chg>=0?'+':''}}{{ss.avg_chg}}%</span>
-                        </div>
-                        <div style="margin-left:auto">
-                            <span class="text-red" style="font-weight:600">{{ss.profit}}</span>
-                            <span style="color:var(--text-muted);margin:0 4px">/</span>
-                            <span class="text-green" style="font-weight:600">{{ss.loss}}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 策略效果图表 -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px" v-if="Object.keys(spData.strategies).length>0">
-                <div style="background:var(--bg-panel);border-radius:10px;padding:12px">
-                    <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px">🎯 策略胜率对比</div>
-                    <div id="spWinRateChart" style="height:200px"></div>
-                </div>
-                <div style="background:var(--bg-panel);border-radius:10px;padding:12px">
-                    <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px">💰 策略平均收益对比</div>
-                    <div id="spAvgChgChart" style="height:200px"></div>
-                </div>
-            </div>
-
-            <!-- 评分区间胜率 -->
-            <div style="margin-bottom:16px" v-if="spData.score_distribution && spData.score_distribution.length>0">
-                <div style="font-size:13px;font-weight:600;margin-bottom:10px">📋 评分区间胜率分布</div>
-                <div class="table-wrapper">
-                    <table style="font-size:12px">
-                        <thead><tr><th>评分区间</th><th style="text-align:right">数量</th><th style="text-align:right">胜率</th><th style="text-align:right">均收益</th><th style="text-align:right">盈/亏</th></tr></thead>
-                        <tbody>
-                            <tr v-for="sg in spData.score_distribution" :key="sg.range" style="border-top:1px solid rgba(255,255,255,0.03)">
-                                <td style="font-weight:600">{{sg.range}}</td>
-                                <td style="text-align:right" class="num">{{sg.count}}</td>
-                                <td style="text-align:right" :class="sg.win_rate>=50?'text-red':'text-green'" class="num">{{sg.win_rate}}%</td>
-                                <td style="text-align:right" :class="sg.avg_chg>=0?'text-red':'text-green'" class="num">{{sg.avg_chg>=0?'+':''}}{{sg.avg_chg}}%</td>
-                                <td style="text-align:right" class="num"><span class="text-red">{{sg.profit}}</span>/<span class="text-green">{{sg.loss}}</span></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- 各策略明细 -->
-            <template v-for="(ss,key) in spData.strategies" :key="'detail-'+key">
-                <div v-if="ss.items && ss.items.length>0" style="margin-bottom:16px">
-                    <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">{{ss.display_name}} 明细 ({{ss.items.length}}只)</div>
-                    <div class="table-wrapper" style="max-height:240px;overflow-y:auto">
-                        <table style="font-size:12px">
-                            <thead><tr><th>股票</th><th style="text-align:right">加入价</th><th style="text-align:right">现价</th><th style="text-align:right">收益</th><th style="text-align:right">评分</th><th>加入日期</th></tr></thead>
-                            <tbody>
-                                <tr v-for="r in ss.items" :key="r.ts_code" style="border-top:1px solid rgba(255,255,255,0.03)">
-                                    <td>{{r.name||r.ts_code}}</td>
-                                    <td style="text-align:right" class="num">¥{{r.add_price}}</td>
-                                    <td style="text-align:right" class="num">¥{{r.current_price}}</td>
-                                    <td style="text-align:right" :class="r.chg_pct>=0?'text-red':'text-green'" class="num">{{r.chg_pct>=0?'+':''}}{{r.chg_pct}}%</td>
-                                    <td style="text-align:right" class="num">{{r.score}}</td>
-                                    <td style="color:var(--text-muted)">{{r.add_date}}</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </template>
-
-            <!-- 无数据提示 -->
-            <div v-if="spData.total_tracked===0" style="text-align:center;padding:30px;color:var(--text-muted)">
-                <div style="font-size:32px;margin-bottom:8px">📭</div>
-                <p>暂无跟踪数据。选股后加入观察池，即可自动跟踪各策略表现。</p>
-            </div>
-        </template>
-    </div>
-
-    <!-- 预警检查 -->
-    <div class="chart-card">
-        <h3>🔔 预警检查</h3>
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">检查所有持仓的止损/止盈是否触发（基于最新收盘价）</p>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-            <button class="btn btn-primary btn-sm" @click="checkAlerts" :disabled="alertCheckLoading">{{alertCheckLoading?'检查中...':'🔍 立即检查'}}</button>
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer">
-                <input type="checkbox" v-model="alertAutoMode" @change="toggleAlertAuto"> 交易时段自动检查(60秒)
-            </label>
-            <span v-if="alertAutoMode" style="font-size:12px;color:var(--green)">● 运行中</span>
-        </div>
-        <div v-if="alertCheckResult" style="margin-top:14px">
-            <div v-if="alertCheckResult.total===0" style="padding:16px;text-align:center;color:var(--green);font-size:14px;background:var(--bg-card);border-radius:8px">✅ 当前无触发预警，持仓安全</div>
-            <div v-else>
-                <div v-for="a in alertCheckResult.triggered" :key="a.type+a.ts_code" :style="{padding:'12px 14px',background:'var(--bg-card)',borderRadius:'8px',marginBottom:'8px',borderLeft:'4px solid '+(a.level==='danger'?'var(--red)':'var(--green)')}">
-                    <div style="font-size:14px;font-weight:600">{{a.message}}</div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">触发日期：{{a.date}} | 现价 ¥{{a.current_price}}</div>
-                </div>
-            </div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:8px">检查时间：{{alertCheckResult.checked_at}}</div>
-        </div>
-    </div>
+<!-- 策略Tab内容已移至顶部指数区显示 -->
+<div :class="['tab-content',activeTab==='strategy'?'active':'']" style="display:none">
+    <!-- 策略面板内容已集成到顶部市场情绪卡片和策略建议条 -->
 </div>
+
+<!-- 策略回测、效果跟踪、预警检查已集成到各功能模块，不再独立展示 -->
 
 <!-- Tab: 自选观察池 -->
 <div :class="['tab-content',activeTab==='watch'?'active':'']">
@@ -1375,6 +1068,10 @@
                 <button :class="['btn','btn-xs',watchFilter==='profit'?'btn-primary':'']" @click="watchFilter='profit'" style="font-size:12px">📈 盈利</button>
                 <button :class="['btn','btn-xs',watchFilter==='loss'?'btn-primary':'']" @click="watchFilter='loss'" style="font-size:12px">📉 亏损</button>
                 <button :class="['btn','btn-xs',watchFilter==='high_score'?'btn-primary':'']" @click="watchFilter='high_score'" style="font-size:12px">🌟 高分</button>
+                <span style="width:1px;height:16px;background:var(--border);margin:0 4px"></span>
+                <button :class="['btn','btn-xs',watchFilter==='trend_break'?'btn-primary':'']" @click="watchFilter='trend_break'" style="font-size:12px;color:var(--text-secondary)" title="趋势突破策略">📈 趋势</button>
+                <button :class="['btn','btn-xs',watchFilter==='sector_leader'?'btn-primary':'']" @click="watchFilter='sector_leader'" style="font-size:12px;color:var(--text-secondary)" title="板块龙头策略">👑 龙头</button>
+                <button :class="['btn','btn-xs',watchFilter==='oversold_bounce'?'btn-primary':'']" @click="watchFilter='oversold_bounce'" style="font-size:12px;color:var(--text-secondary)" title="超跌反弹策略">⚡ 超跌</button>
             </div>
         </div>
         <div style="display:flex;gap:10px;align-items:center;margin-left:auto">
@@ -1823,7 +1520,7 @@
                 </span>
             </div>
             <div style="font-size:13px;color:var(--text-secondary)">
-                {{threeViewsCheck.name}} ({{threeViewsCheck.ts_code}}) 最新价: ¥{{threeViewsCheck.close}} | {{threeViewsCheck.summary?.suggestion}}
+                {{threeViewsCheck.name}} ({{threeViewsCheck.ts_code}}) 最新价: ¥{{threeViewsCheck.realtime_price||threeViewsCheck.close}} <span v-if="threeViewsCheck.data_source" style="font-size:11px;opacity:0.6">· {{threeViewsCheck.data_source==='sina'?'新浪实时':threeViewsCheck.data_source==='eastmoney'?'东财实时':'Tushare历史'}}</span> | {{threeViewsCheck.summary?.suggestion}}
             </div>
             <div style="margin-top:8px;display:flex;gap:12px;font-size:12px">
                 <span :style="threeViewsCheck.checks?.high_low?.passed?'color:var(--success)':'color:var(--text-muted)'">
@@ -1909,21 +1606,178 @@
 </div>
 </div>
 
-<!-- Sell Modal -->
+<!-- Sell Modal (v3.4 Smart Check) -->
 <div class="modal-overlay" v-if="showSellModal" @click.self="showSellModal=false">
-<div class="modal">
+<div class="modal sell-modal-lg">
     <h2>💰 卖出 {{sellTarget?.name}}</h2>
-    <div style="padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);margin-bottom:16px;font-size:14px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><span style="color:var(--text-secondary)">持仓：</span><span class="num">{{sellTarget?.total_volume}} 股</span></div><div><span style="color:var(--text-secondary)">成本：</span><span class="num">¥{{sellTarget?.avg_cost?.toFixed(3)}}</span></div><div><span style="color:var(--text-secondary)">现价：</span><span class="num" :class="sellTarget?.pct_chg>=0?'text-red':'text-green'">¥{{sellTarget?.current_price}}</span></div><div><span style="color:var(--text-secondary)">盈亏：</span><span class="num" :class="sellTarget?.profit>=0?'text-red':'text-green'">{{sellTarget?.profit>=0?'+':''}}¥{{formatNum(sellTarget?.profit)}}</span></div></div></div>
-    <div class="form-row">
-        <div class="form-group"><label>卖出价格 (¥)</label><input v-model.number="sellForm.sell_price" type="number" step="0.001" placeholder="0.000"><div class="form-hint"><a href="#" @click.prevent="sellForm.sell_price=sellTarget?.current_price||0">使用现价</a></div></div>
-        <div class="form-group"><label>卖出数量 (股)</label><input v-model.number="sellForm.sell_volume" type="number" step="100" placeholder="0"><div class="form-hint"><a href="#" @click.prevent="sellForm.sell_volume=sellTarget?.total_volume">全部卖出</a></div></div>
+    
+    <!-- 持仓概览 -->
+    <div style="padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);margin-bottom:16px;font-size:14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
+            <div><span style="color:var(--text-secondary)">持仓：</span><span class="num">{{sellTarget?.total_volume}} 股</span></div>
+            <div><span style="color:var(--text-secondary)">成本：</span><span class="num">¥{{sellTarget?.avg_cost?.toFixed(3)}}</span></div>
+            <div><span style="color:var(--text-secondary)">现价：</span><span class="num" :class="sellTarget?.pct_chg>=0?'text-red':'text-green'">¥{{sellTarget?.current_price}}</span></div>
+            <div><span style="color:var(--text-secondary)">盈亏：</span><span class="num" :class="sellTarget?.profit>=0?'text-red':'text-green'">{{sellTarget?.profit>=0?'+':''}}¥{{formatNum(sellTarget?.profit)}}</span></div>
+        </div>
     </div>
-    <div class="form-row"><div class="form-group"><label>卖出日期</label><input v-model="sellForm.sell_date" type="date"></div><div class="form-group"><label>手续费 (¥)</label><input v-model.number="sellForm.fee" type="number" step="0.01" placeholder="0.00"></div></div>
-    <div class="form-group"><label>卖出理由</label><textarea v-model="sellForm.reason" placeholder="止盈/止损/调仓..." rows="2"></textarea></div>
-    <div class="form-group"><label>备注</label><input v-model="sellForm.note" placeholder="可选"></div>
-    <div v-if="sellPreview" style="padding:14px;background:var(--bg-card);border-radius:var(--radius-sm);margin-bottom:16px"><div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">预估盈亏</div><div style="font-size:20px;font-weight:700" :class="sellPreview.profit>=0?'text-red':'text-green'">{{sellPreview.profit>=0?'+':''}}¥{{formatNum(sellPreview.profit)}} <span style="font-size:14px">({{sellPreview.profit_pct>=0?'+':''}}{{sellPreview.profit_pct.toFixed(2)}}%)</span></div></div>
+
+    <!-- 卖出智能检查 -->
+    <div v-if="sellCheckLoading" style="padding:30px;text-align:center;color:var(--text-secondary)">
+        <span style="font-size:20px">🔍</span> 正在分析卖出时机...
+    </div>
+
+    <template v-else-if="sellCheckData">
+        
+        <!-- 盈亏状态检查 -->
+        <div class="sell-check-section">
+            <div class="sell-check-title"><span class="check-icon">📊</span> 盈亏状态检查</div>
+            <div class="profit-check-card" :style="{borderLeftColor:sellCheckData.profit_check.color}">
+                <div class="pc-label" :style="{color:sellCheckData.profit_check.color}">{{sellCheckData.profit_check.label}}</div>
+                <div class="pc-amount">{{sellCheckData.profit_check.pct>=0?'+':''}}{{sellCheckData.profit_check.pct}}%<span class="pc-sub"> ({{sellCheckData.profit_check.amount>=0?'+':''}}¥{{formatNum(sellCheckData.profit_check.amount)}})</span></div>
+                <div class="pc-suggestion">{{sellCheckData.profit_check.suggestion}}</div>
+                <div class="pc-detail">{{sellCheckData.profit_check.detail}}</div>
+            </div>
+        </div>
+
+        <!-- 技术面信号 -->
+        <div class="sell-check-section">
+            <div class="sell-check-title"><span class="check-icon">📈</span> 技术面信号</div>
+            <div class="tech-grid">
+                <!-- 均线排列 -->
+                <div class="tech-item" :class="{passed:sellCheckData.technical_check.ma_status.passed===true,fail:sellCheckData.technical_check.ma_status.passed===false}">
+                    <span class="tech-tag">{{sellCheckData.technical_check.ma_status.passed===false?'🔴':sellCheckData.technical_check.ma_status.passed===true?'✅':'⚪'}}</span>
+                    <span class="tech-name">均线排列</span>
+                    <span class="tech-val">{{sellCheckData.technical_check.ma_status.label}}</span>
+                    <span class="tech-hint" v-if="sellCheckData.technical_check.ma_status.ma5&&sellCheckData.technical_check.ma_status.ma20">MA5={{sellCheckData.technical_check.ma_status.ma5}}>MA20={{sellCheckData.technical_check.ma_status.ma20}}</span>
+                </div>
+                <!-- 量价配合 -->
+                <div class="tech-item" :class="{passed:sellCheckData.technical_check.volume_price.passed===true,fail:sellCheckData.technical_check.volume_price.passed===false}">
+                    <span class="tech-tag">{{sellCheckData.technical_check.volume_price.passed===false?'🔴':sellCheckData.technical_check.volume_price.passed===true?'✅':'⚪'}}</span>
+                    <span class="tech-name">量价配合</span>
+                    <span class="tech-val">{{sellCheckData.technical_check.volume_price.label}}</span>
+                    <span class="tech-hint">量比 {{sellCheckData.technical_check.volume_price.vol_ratio}} | 日涨跌 {{sellCheckData.technical_check.volume_price.pct_chg>=0?'+':''}}{{sellCheckData.technical_check.volume_price.pct_chg}}%</span>
+                </div>
+                <!-- 连续走势 -->
+                <div class="tech-item" :class="{passed:sellCheckData.technical_check.consecutive.passed===true,fail:sellCheckData.technical_check.consecutive.passed===false}">
+                    <span class="tech-tag">{{sellCheckData.technical_check.consecutive.passed===false?'🔴':sellCheckData.technical_check.consecutive.passed===true?'✅':'⚪'}}</span>
+                    <span class="tech-name">连续走势</span>
+                    <span class="tech-val">{{sellCheckData.technical_check.consecutive.label}}</span>
+                </div>
+                <!-- 位置分析 -->
+                <div class="tech-item" :class="{passed:sellCheckData.technical_check.position_analysis.passed===true,fail:sellCheckData.technical_check.position_analysis.passed===false}">
+                    <span class="tech-tag">{{sellCheckData.technical_check.position_analysis.passed===false?'🔴':sellCheckData.technical_check.position_analysis.passed===true?'✅':'⚪'}}</span>
+                    <span class="tech-name">位置分析</span>
+                    <span class="tech-val">{{sellCheckData.technical_check.position_analysis.label}}</span>
+                </div>
+            </div>
+            <!-- 综合判定 -->
+            <div class="verdict-bar" :class="sellCheckData.technical_check.overall.verdict">
+                <span class="verdict-score">{{sellCheckData.technical_check.overall.score}}分</span>
+                <span class="verdict-text">{{sellCheckData.technical_check.overall.label}}</span>
+                <span class="verdict-reasons" v-if="sellCheckData.technical_check.overall.reasons">{{sellCheckData.technical_check.overall.reasons.join(' | ')}}</span>
+            </div>
+        </div>
+
+        <!-- 价格参考位 -->
+        <div class="sell-check-section">
+            <div class="sell-check-title"><span class="check-icon">📍</span> 建议价格位 <span class="check-hint">(点击填入卖出价格)</span></div>
+            
+            <!-- 压力/止盈位 -->
+            <div class="price-grid-row">
+                <div class="pg-label-col">止盈价位<br><small>(压力区)</small></div>
+                <div class="pg-btns">
+                    <a href="#" v-for="r in sellCheckData.price_levels.resistances" :key="r.label"
+                       @click.prevent="pickPrice(r.price)" 
+                       class="price-ref-btn resist"
+                       :class="{active:sellForm.sell_price===r.price}">
+                        <span class="pr-label">{{r.label.split(' ')[0]}}</span>
+                        <span class="pr-price">¥{{r.price}}</span>
+                        <span class="pr-desc">{{r.desc}}</span>
+                    </a>
+                </div>
+            </div>
+            
+            <!-- 当前价高亮 -->
+            <div class="price-current-row">
+                <button @click="pickPrice(sellCheckData.price_levels.current_price)" class="price-current-btn" :class="{active:sellForm.sell_price===sellCheckData.price_levels.current_price}">
+                    现价 ¥{{sellCheckData.price_levels.current_price}} <span class="source-badge" :title="'数据源:'+sellCheckData.data_source">{{sellCheckData.data_source==='sina_realtime'?'新浪实时':sellCheckData.data_source}}</span>
+                </button>
+            </div>
+            
+            <!-- 支撑/止损位 -->
+            <div class="price-grid-row">
+                <div class="pg-label-col">止损价位<br><small>(支撑区)</small></div>
+                <div class="pg-btns">
+                    <a href="#" v-for="s in sellCheckData.price_levels.supports" :key="s.label"
+                       @click.prevent="pickPrice(s.price)"
+                       class="price-ref-btn support"
+                       :class="{active:sellForm.sell_price===s.price}">
+                        <span class="pr-label">{{s.label.split(' ')[0]}}</span>
+                        <span class="pr-price">¥{{s.price}}</span>
+                        <span class="pr-desc">{{s.desc}}</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- 风险警报 -->
+        <div class="sell-check-section" v-if="sellCheckData.risk_alerts && sellCheckData.risk_alerts.length > 0">
+            <div class="sell-check-title"><span class="check-icon">⚠️</span> 风险警示</div>
+            <div v-for="(alert,idx) in sellCheckData.risk_alerts" :key="idx" class="risk-alert-item" :class="'alert-'+alert.level">
+                <span class="alert-icon">{{alert.icon}}</span>
+                <span>{{alert.text}}</span>
+            </div>
+        </div>
+
+        <!-- 快捷操作 -->
+        <div class="quick-actions-row">
+            <template v-for="qa in sellCheckData.quick_actions" :key="qa.action">
+                <button class="quick-action-btn" @click="quickSell(qa.action)">{{qa.label}}</button>
+            </template>
+        </div>
+
+    </template>
+
+    <!-- 交易参数 -->
+    <div class="sell-form-area">
+        <h3 class="section-divider">📝 交易参数</h3>
+        <div class="form-row">
+            <div class="form-group"><label>卖出数量 (股)</label><input v-model.number="sellForm.sell_volume" type="number" step="100" placeholder="0"></div>
+            <div class="form-group"><label>卖出价格 (¥)</label><input v-model.number="sellForm.sell_price" type="number" step="0.001" placeholder="0.000"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>卖出日期</label><input v-model="sellForm.sell_date" type="date"></div>
+            <div class="form-group"><label>手续费 (¥)</label><input v-model.number="sellForm.fee" type="number" step="0.01" placeholder="0.00"></div>
+        </div>
+        
+        <!-- 盈亏预览 -->
+        <div v-if="sellPreview" class="sell-preview-enhanced">
+            <div class="sp-header">📊 本次交易预估</div>
+            <div class="sp-grid">
+                <div class="sp-row"><span>卖出收入</span><span>¥{{formatNum((sellForm.sell_price||0)*(sellForm.sell_volume||0))}}</span></div>
+                <div class="sp-row"><span>对应成本</span><span>¥{formatNum(((sellTarget?.avg_cost||0)*(sellForm.sell_volume||0)).toFixed(2))}</span></div>
+                <div class="sp-line"></div>
+                <div class="sp-row sp-total"><span>本笔盈亏</span><span :class="sellPreview.profit>=0?'text-red':'text-green'">{{sellPreview.profit>=0?'+':''}}¥{{formatNum(sellPreview.profit)}} ({{sellPreview.profit_pct>=0?'+':''}}{{sellPreview.profit_pct.toFixed(2)}}%)</span></div>
+            </div>
+            <div class="sp-after" v-if="sellTarget">
+                卖出后剩余: <b>{{Math.max(0,sellTarget.total_volume-(sellForm.sell_volume||0))}}股</b> | 总资产变化: <b :class="sellPreview.profit>=0?'text-red':'text-green'">{{sellPreview.profit>=0?'+':''}}¥{{formatNum(sellPreview.profit)}}</b>
+            </div>
+        </div>
+
+        <div class="form-group"><label>卖出理由</label><textarea v-model="sellForm.reason" placeholder="止盈/止损/调仓换股..." rows="2"></textarea></div>
+        <div class="form-group"><label>备注</label><input v-model="sellForm.note" placeholder="可选"></div>
+    </div>
+
+    <!-- 错误提示 + 确认 -->
     <div class="error-msg" v-if="sellError">{{sellError}}</div>
-    <div class="form-actions"><button class="btn" @click="showSellModal=false">取消</button><button class="btn btn-success" @click="submitSell" :disabled="submittingSell">{{submittingSell?'处理中...':'确认卖出'}}</button></div>
+    <label class="sell-confirm-check" v-if="!sellCheckLoading && sellCheckData">
+        <input type="checkbox" v-model="sellConfirmedCheck">
+        <span>我已查看上述检查结果和价格参考，确认执行本次卖出</span>
+    </label>
+    <div class="form-actions">
+        <button class="btn" @click="showSellModal=false">取消</button>
+        <button class="btn btn-success" @click="submitSell" :disabled="submittingSell || (!sellConfirmedCheck && !sellCheckLoading && sellCheckData)">{{submittingSell?'处理中...':'确认卖出'}}</button>
+    </div>
 </div>
 </div>
 
@@ -2199,7 +2053,72 @@
     </div>
 </div>
 </div>
-</div><!-- end .container -->
+
+<!-- Strategy Detail Modal -->
+<div class="modal-overlay" v-if="showStrategyDetail" @click.self="showStrategyDetail=false">
+<div class="modal" style="max-width:600px">
+    <h2>🌤️ 市场环境与策略建议详情</h2>
+    
+    <div v-if="regimeLoading" style="text-align:center;padding:40px;color:var(--text-muted)">⏳ 加载中...</div>
+    
+    <template v-if="regimeData && !regimeLoading">
+        <!-- 核心指标 -->
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
+            <div style="padding:14px;background:linear-gradient(135deg,rgba(59,130,246,0.1),rgba(139,92,246,0.1));border-radius:10px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">市场状态</div>
+                <div style="font-size:20px;font-weight:700" :style="{color: regimeData.regime_score>=65?'var(--red)':regimeData.regime_score>=40?'var(--yellow)':'var(--green)'}">{{regimeData.regime}}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px">评分 {{regimeData.regime_score}}/100</div>
+            </div>
+            <div style="padding:14px;background:var(--bg-panel);border-radius:10px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">建议仓位</div>
+                <div style="font-size:20px;font-weight:700;color:var(--blue)">{{regimeData.strategy.max_position}}</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">{{regimeData.strategy.style}}</div>
+            </div>
+        </div>
+        
+        <!-- 操作指引 -->
+        <div style="padding:14px;background:var(--bg-panel);border-radius:10px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:10px">📌 操作方向</div>
+            <div style="font-size:14px;color:var(--text-primary);margin-bottom:10px">{{regimeData.strategy.action}}</div>
+            <div style="display:flex;gap:20px;margin-bottom:10px;font-size:13px">
+                <div><span style="color:var(--green);font-weight:600">止损: {{regimeData.strategy.stop_loss}}</span></div>
+                <div><span style="color:var(--red);font-weight:600">止盈: {{regimeData.strategy.take_profit}}</span></div>
+            </div>
+            <div style="border-top:1px solid var(--border);padding-top:10px">
+                <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">💡 要点提醒</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                    <span v-for="(tip,i) in regimeData.strategy.tips" :key="i" style="font-size:11px;padding:3px 8px;background:var(--bg-card);border-radius:4px;color:var(--text-muted)">{{tip}}</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 技术指标 -->
+        <div style="padding:14px;background:var(--bg-panel);border-radius:10px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:10px">📊 技术指标</div>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;font-size:12px">
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">MA20/MA60</span>
+                    <span class="num" style="font-weight:600">{{regimeData.indicators.ma20}} / {{regimeData.indicators.ma60}}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">20日涨幅</span>
+                    <span :class="regimeData.indicators.pct_20d>=0?'text-red':'text-green'" style="font-weight:600">{{regimeData.indicators.pct_20d>=0?'+':''}}{{regimeData.indicators.pct_20d}}%</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">波动率</span>
+                    <span class="num" style="font-weight:600">{{regimeData.indicators.volatility}}%</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">趋势强度</span>
+                    <span :class="regimeData.indicators.ma20>regimeData.indicators.ma60?'text-red':'text-green'" style="font-weight:600">{{regimeData.indicators.ma20>regimeData.indicators.ma60?'多头':'空头'}}</span>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <div class="form-actions"><button class="btn" @click="showStrategyDetail=false">关闭</button></div>
+</div>
+</div>
 
 <!-- Import Modal -->
 
@@ -2605,9 +2524,9 @@
 </div>
 </div>
 
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="/static/js/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-<script src="/static/js/app.js?v=12"></script>
+<script src="/static/js/app.js?v=25"></script>
 <script>
 // CDN加载失败检测
 document.addEventListener('DOMContentLoaded', function() {

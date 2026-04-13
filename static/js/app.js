@@ -79,14 +79,15 @@ setup(){
     const screenStrategyReason=ref('');
     const screenStrategyRecommended=ref('');
     const strategyBacktestData=ref({});
-    const showAddModal=ref(false),showSellModal=ref(false),showDetailModal=ref(false),showAlertModal=ref(false),showImportModal=ref(false),showParamsModal=ref(false),showHeaderMenu=ref(false);
-    const editingPosition=ref(null),detailPosition=ref(null),sellTarget=ref(null),alertTarget=ref(null);
+    const showAddModal=ref(false),showSellModal=ref(false),showDetailModal=ref(false),showAlertModal=ref(false),showImportModal=ref(false),showParamsModal=ref(false),showAdviceModal=ref(false),showHeaderMenu=ref(false),showTradeDetailModal=ref(false);
+    const editingPosition=ref(null),detailPosition=ref(null),sellTarget=ref(null),alertTarget=ref(null),tradeDetailTarget=ref(null),adviceTarget=ref(null),adviceData=ref(null),adviceLoading=ref(false),adviceError=ref('');
+    const threeViewsCheck=ref(null),threeViewsLoading=ref(false);
+    const sellCheckData=ref(null),sellCheckLoading=ref(false),sellConfirmedCheck=ref(false);
     const emotionLabels=EL;
     const addForm=ref({ts_code:'',buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''});
     const sellForm=ref({sell_price:'',sell_volume:'',sell_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:''});
     const alertForm=ref({stop_loss:'',stop_profit:''});
     const priceLevels=ref(null),priceLevelsLoading=ref(false),priceLevelsError=ref('');
-    const showAdviceModal=ref(false),adviceTarget=ref(null),adviceData=ref(null),adviceLoading=ref(false),adviceError=ref('');
     const addError=ref(''),sellError=ref(''),submitting=ref(false),submittingSell=ref(false);
     const actionMenuOpen=ref(null);
     const searchResults=ref([]),importData=ref(''),importMode=ref('replace'),importError=ref('');
@@ -280,6 +281,7 @@ setup(){
     // Review & Strategy
     const reviewPeriod=ref('week'),reviewLoading=ref(false),reviewData=ref(null);
     const regimeLoading=ref(false),regimeData=ref(null);
+    const showStrategyDetail=ref(false); // 策略详情弹窗
     const backtestDays=ref(30),backtestHold=ref(5),backtestLoading=ref(false),backtestData=ref(null);
     const alertCheckLoading=ref(false),alertCheckResult=ref(null);
     const alertAutoMode=ref(false),alertAutoTimer=ref(null);
@@ -299,6 +301,7 @@ setup(){
     function showToast(m){toastMsg.value=m;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toastMsg.value=''},3000)}
     function round2(n){return Math.round(n*100)/100}
     function formatNum(n){if(n===null||n===undefined)return'-';return Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}
+    function getAlertsTooltip(alerts){if(!alerts||alerts.length===0)return'';return alerts.map(a=>a.message+(a.detail?' | '+a.detail:'')).join('\n')}
 
     async function fetchData(){
         if(loading.value)return;loading.value=true;
@@ -318,6 +321,9 @@ setup(){
     function openAddModal(){resetForm();showAddModal.value=true}
     function openTradeModal(p){editingPosition.value=p;addForm.value={ts_code:p.ts_code,buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''};showAddModal.value=true}
 
+    // 买入弹窗中输入股票代码时自动触发三看确认
+    watch(()=>addForm.value.ts_code,(code)=>{if(code&&code.length>=6)loadThreeViews(code)},{delay:500})
+
     async function submitPosition(){
         addError.value='';const f=addForm.value;
         if(!f.ts_code.trim()){addError.value='请输入股票代码';return}if(!f.buy_price||f.buy_price<=0){addError.value='请输入有效的买入价格';return}if(!f.buy_volume||f.buy_volume<=0){addError.value='请输入有效的买入数量';return}
@@ -325,7 +331,28 @@ setup(){
         try{const url=editingPosition.value?`${API}/api/positions/${editingPosition.value.id}/trades`:`${API}/api/positions`;const r=await fetchWithAuth(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});const d=await r.json();if(r.ok){showAddModal.value=false;showToast(d.message||'保存成功');resetForm();await fetchData()}else{addError.value=d.error||'保存失败'}}catch(e){addError.value='网络错误'}finally{submitting.value=false}
     }
 
-    function openSellModal(p){sellTarget.value=p;sellForm.value={sell_price:p.current_price||'',sell_volume:'',sell_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:''};sellError.value='';showSellModal.value=true}
+    // 确认买入：先检查三看确认结果
+    async function submitPositionWithConfirm(){
+        addError.value='';
+        const f=addForm.value;
+        if(!f.ts_code.trim()){addError.value='请输入股票代码';return}
+        if(!f.buy_price||f.buy_price<=0){addError.value='请输入有效的买入价格';return}
+        if(!f.buy_volume||f.buy_volume<=0){addError.value='请输入有效的买入数量';return}
+        // 检查三看确认结果
+        if(threeViewsCheck.value&&threeViewsCheck.value.checks){
+            const checks=threeViewsCheck.value.checks;
+            const passedCount=[checks.high_low?.passed,checks.ma?.passed,checks.volume?.passed].filter(Boolean).length;
+            if(passedCount<2){
+                if(!confirm(`⚠️ 三看确认仅通过 ${passedCount}/3 项\n\n${checks.high_low?.description||''}\n${checks.ma?.description||''}\n${checks.volume?.description||''}\n\n是否继续买入？`)){return}
+            }
+        }
+        await submitPosition();
+    }
+
+    function openSellModal(p){sellTarget.value=p;sellForm.value={sell_price:p.current_price||'',sell_volume:'',sell_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:''};sellError.value='';sellConfirmedCheck.value=false;showSellModal.value=true;loadSellCheck(p.id)}
+    async function loadSellCheck(pid){sellCheckLoading.value=true;try{const r=await fetchWithAuth(`${API}/api/positions/${pid}/sell-check`);if(r.ok)sellCheckData.value=await r.json();else sellCheckData.value=null}catch(e){console.error('卖出检查加载失败:',e);sellCheckData.value=null}finally{sellCheckLoading.value=false}}
+    function pickPrice(price){sellForm.value.sell_price=price}
+    function quickSell(mode){const t=sellTarget.value;if(!t||!mode)return;if(mode==='full'){sellForm.value.sell_volume=t.total_volume;sellForm.value.sell_price=t.current_price||sellForm.value.sell_price}else if(mode==='half'){sellForm.value.sell_volume=Math.floor(t.total_volume/2)}}
     const sellPreview=computed(()=>{const f=sellForm.value,t=sellTarget.value;if(!t||!f.sell_price||!f.sell_volume)return null;const ca=t.avg_cost,sa=f.sell_price*f.sell_volume,co=ca*f.sell_volume,pr=sa-co-(f.fee||0);return{profit:Math.round(pr*100)/100,profit_pct:co>0?Math.round(pr/co*100*100)/100:0}});
     async function submitSell(){
         sellError.value='';const f=sellForm.value;if(!f.sell_price||f.sell_price<=0){sellError.value='请输入卖出价格';return}if(!f.sell_volume||f.sell_volume<=0){sellError.value='请输入卖出数量';return}
@@ -351,6 +378,16 @@ setup(){
 
     function openDetailModal(p){detailPosition.value=p;showDetailModal.value=true;loadKline(p.ts_code)}
     function closeDetailModal(){showDetailModal.value=false;if(klineChart){klineChart.dispose();klineChart=null}}
+    function openTradeDetailModal(t){tradeDetailTarget.value=t;showTradeDetailModal.value=true}
+    function closeTradeDetailModal(){showTradeDetailModal.value=false;tradeDetailTarget.value=null}
+    async function loadThreeViews(ts_code){
+        if(!ts_code){threeViewsCheck.value=null;return}
+        threeViewsLoading.value=true;
+        try{
+            const r=await fetchWithAuth(`${API}/api/check-three-views?ts_code=${ts_code}`);
+            if(r.ok){threeViewsCheck.value=await r.json()}else{threeViewsCheck.value=null}
+        }catch(e){console.error('三看确认加载失败:',e);threeViewsCheck.value=null}finally{threeViewsLoading.value=false}
+    }
     function openAdviceModal(p){
         adviceTarget.value=p;adviceData.value=null;adviceLoading.value=true;adviceError.value='';
         showAdviceModal.value=true;
@@ -741,8 +778,14 @@ setup(){
     const watchGroups=computed(()=>{const s=new Set();watchItems.value.forEach(w=>{if(w.tag)s.add(w.tag)});return[...s].sort()});
     const filteredWatchItems=computed(()=>{
         let list=[...watchItems.value];
-        if(watchFilter.value!=='all')list=list.filter(w=>w.tag===watchFilter.value);
-        if(watchSearch.value.trim()){const kw=watchSearch.value.trim().toLowerCase();list=list.filter(w=>(w.name||'').toLowerCase().includes(kw)||w.ts_code.toLowerCase().includes(kw)||(w.tag||'').toLowerCase().includes(kw))}
+        const f=watchFilter.value;
+        if(f!=='all'){
+            if(f==='profit')list=list.filter(w=>(w.track_chg_pct||0)>0);
+            else if(f==='loss')list=list.filter(w=>(w.track_chg_pct||0)<0);
+            else if(f==='high_score')list=list.filter(w=>(w.add_score||0)>=60);
+            else if(f==='trend_break'||f==='sector_leader'||f==='oversold_bounce')list=list.filter(w=>w.add_strategy===f);
+        }
+        if(watchSearch.value.trim()){const kw=watchSearch.value.trim().toLowerCase();list=list.filter(w=>(w.name||'').toLowerCase().includes(kw)||w.ts_code.toLowerCase().includes(kw)||(w.tag||'').toLowerCase().includes(kw)||(w.add_strategy||'').toLowerCase().includes(kw))}
         return list;
     });
 
@@ -1333,6 +1376,21 @@ setup(){
 
     // Filter & Sort
     const filteredPositions=computed(()=>{let list=[...positions.value];if(searchKeyword.value.trim()){const kw=searchKeyword.value.trim().toLowerCase();list=list.filter(p=>p.name.toLowerCase().includes(kw)||p.ts_code.toLowerCase().includes(kw)||(p.industry&&p.industry.includes(kw)))}list.sort((a,b)=>{let va=a[sortKey.value],vb=b[sortKey.value];if(typeof va==='string'){va=va.toLowerCase();vb=(vb||'').toLowerCase()}if(va<vb)return sortDir.value==='asc'?-1:1;if(va>vb)return sortDir.value==='asc'?1:-1;return 0});return list});
+    // 策略数据计算属性（用于顶部市场情绪卡片）
+    const strategyData=computed(()=>{
+        if(!regimeData.value)return{};
+        const r=regimeData.value;
+        return{
+            market_status:r.regime||'--',
+            score:r.regime_score||0,
+            position_suggestion:r.strategy?.max_position||'--',
+            trend_strength:r.indicators?.ma20>r.indicators?.ma60?'多头':'空头',
+            action_direction:r.strategy?.action||'--',
+            stop_loss:r.strategy?.stop_loss||'--',
+            take_profit:r.strategy?.take_profit||'--',
+            key_points:r.strategy?.tips?r.strategy.tips.join('；'):'--'
+        }
+    });
     function filterPositions(){}
     function sortPositions(){}
 
@@ -1404,23 +1462,25 @@ setup(){
         }catch(e){/* 静默失败，使用 localStorage 中的缓存 */}
     }
 
-    onMounted(()=>{if(isLoggedIn.value){fetchCurrentUser();fetchData();fetchIndex();fetchCapital()}startTokenRefresh();startAutoRefresh();window.addEventListener('resize',handleResize)});
+    onMounted(()=>{if(isLoggedIn.value){fetchCurrentUser();fetchData();fetchIndex();fetchCapital();loadRegime()}startTokenRefresh();startAutoRefresh();window.addEventListener('resize',handleResize)});
     onUnmounted(()=>{clearInterval(refreshTimer);clearInterval(screenPollTimer);if(alertAutoTimer.value)clearInterval(alertAutoTimer.value);window.removeEventListener('resize',handleResize);pieChart&&pieChart.dispose();barChart&&barChart.dispose();emotionChart&&emotionChart.dispose();winRateChart&&winRateChart.dispose();profitChart&&profitChart.dispose();klineChart&&klineChart.dispose();compareNormChart&&compareNormChart.dispose();comparePriceChart&&comparePriceChart.dispose();spWinRateChart&&spWinRateChart.dispose();spAvgChgChart&&spAvgChgChart.dispose()});
 
     return{isLoggedIn,currentUser,showAuthModal,authMode,authError,authSubmitting,loginForm,registerForm,doLogin,doRegister,doLogout,fetchCurrentUser,
         // 适老化字体大小
         fontSize,setFontSize,
-        positions,summary,loading,searchKeyword,sortKey,sortDir,activeTab,indexData,indexSource,indexTime,tradeLogs,tradeLogStats,capitalForm,
+        positions,summary,loading,searchKeyword,sortKey,sortDir,activeTab,indexData,indexSource,indexTime,tradeLogs,tradeLogStats,capitalForm,strategyData,
         screenMarket,screenStats,screenResults,screenHistory,screenInfo,screenBonusTags,getScreenPreview,
         currentStrategy,strategyList,strategyListSafe,currentStrategyMeta,screenStrategyReason,screenStrategyRecommended,strategyBacktestData,
-        showAddModal,showSellModal,showDetailModal,showAlertModal,showImportModal,showParamsModal,showAdviceModal,showHeaderMenu,editingPosition,detailPosition,sellTarget,alertTarget,adviceTarget,
+        showAddModal,showSellModal,showDetailModal,showAlertModal,showImportModal,showParamsModal,showAdviceModal,showHeaderMenu,showTradeDetailModal,editingPosition,detailPosition,sellTarget,alertTarget,adviceTarget,tradeDetailTarget,
         emotionLabels,addForm,sellForm,alertForm,addError,sellError,submitting,submittingSell,searchResults,importData,importMode,importError,
         toastMsg,sellPreview,filteredPositions,priceLevels,priceLevelsLoading,priceLevelsError,adviceData,adviceLoading,adviceError,actionMenuOpen,
-        reviewPeriod,reviewLoading,reviewData,regimeLoading,regimeData,backtestDays,backtestHold,backtestLoading,backtestData,alertCheckLoading,alertCheckResult,alertAutoMode,alertAutoTimer,toggleAlertAuto,
+        threeViewsCheck,threeViewsLoading,loadThreeViews,
+        sellCheckData,sellCheckLoading,sellConfirmedCheck,loadSellCheck,pickPrice,quickSell,
+        reviewPeriod,reviewLoading,reviewData,regimeLoading,regimeData,showStrategyDetail,backtestDays,backtestHold,backtestLoading,backtestData,alertCheckLoading,alertCheckResult,alertAutoMode,alertAutoTimer,toggleAlertAuto,
         klineData,klineLoading,
         screenParams,paramsLoading,paramsDefault,forceMode,spLoading,spData,spError,spLoadedAt,loadStrategyPerformance,
         refreshData,searchStock,selectStock,submitPosition,openAddModal,openTradeModal,
-        openSellModal,submitSell,openAlertModal,submitAlerts,clearAlerts,setStopLoss,setTakeProfit,openDetailModal,closeDetailModal,openAdviceModal,quickAddFromAdvice,quickSellFromAdvice,confirmDelete,deleteTrade,toggleActionMenu,closeActionMenu,
+        openSellModal,submitSell,submitPositionWithConfirm,openAlertModal,submitAlerts,clearAlerts,setStopLoss,setTakeProfit,openDetailModal,closeDetailModal,openTradeDetailModal,closeTradeDetailModal,openAdviceModal,quickAddFromAdvice,quickSellFromAdvice,confirmDelete,deleteTrade,toggleActionMenu,closeActionMenu,
         saveCapital,switchToTradeLog,switchToAnalysis,switchToScreener,switchToReview,switchToStrategy,selectStrategy,
         loadReview,loadRegime,runBacktest,checkAlerts,loadKline,
         startScreen,startScreenForce,pollScreenResult,loadScreenResult,quickBuyFromScreen,
@@ -1457,6 +1517,7 @@ setup(){
         openStockFinanceModal,calculateFinanceHealth,renderStockIncomeChart,renderRoeTrendChart,renderRevenueTrendChart,
         financeKpiClass,financeKpiTag,financeKpiTagClass,
         formatAmount,
+        getAlertsTooltip,
         // 选股结果展开行
         expandedScreenRow,toggleScreenRow};
 }

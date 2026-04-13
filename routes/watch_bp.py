@@ -33,9 +33,18 @@ STRATEGY_NAMES = {
 @watch_bp.route("/api/watch-list", methods=["GET"])
 @login_required
 def get_watch_list():
-    """获取观察池列表，附带最新行情"""
+    """获取观察池列表，附带最新行情
+    
+    支持查询参数：
+      ?strategy=trend_break  — 按来源策略筛选
+    """
     user_id = get_current_user_id()
+    filter_strategy = request.args.get("strategy", "").strip()
+
     items = get_watch_list_items(user_id)
+    if filter_strategy:
+        items = [i for i in items if i.get("add_strategy") == filter_strategy]
+
     if not items:
         return jsonify({"items": [], "count": 0})
 
@@ -55,7 +64,14 @@ def get_watch_list():
             pass
         enriched.append(item)
 
-    enriched.sort(key=lambda x: x.get("track_chg_pct", 0) or 0, reverse=True)
+    # 排序：添加日期(新→旧) → 评分(高→低) → 跟踪收益(高→低)
+    # 日期用字符串降序（YYYY-MM-DD格式天然可比较）
+    enriched.sort(key=lambda x: (
+        x.get("add_date") or "",          # 日期升序
+        x.get("add_score", 0) or 0,       # 分数升序  
+        x.get("track_chg_pct", 0) or 0,   # 收益升序
+    ), reverse=True)
+    
     return jsonify({"items": enriched, "count": len(enriched)})
 
 
