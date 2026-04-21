@@ -1132,7 +1132,6 @@
                     <div style="font-size:11px;color:var(--text-muted)">现价</div>
                     <div class="num" style="font-size:14px;font-weight:600" :class="(w.current_pct_chg||0)>=0?'text-red':'text-green'">
                         ¥{{w.current_price||'-'}}
-                        <span style="font-size:11px;margin-left:4px">({{w.current_pct_chg!=null?(w.current_pct_chg>=0?'+':'')+w.current_pct_chg+'%':'--'}})</span>
                     </div>
                 </div>
                 <div style="margin-left:auto">

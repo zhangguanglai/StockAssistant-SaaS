@@ -618,7 +618,7 @@ def add_watch_item(ts_code, name="", add_price=0, add_strategy="", add_score=0, 
             cur.execute(
                 """INSERT OR IGNORE INTO watch_list (user_id, ts_code, name, add_price, add_date, add_strategy, add_score, tag, note, created_at, match_audit)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (user_id, ts_code, name, add_price, now.strftime("%Y-%m-%d"), add_strategy, add_score, tag, note, now.isoformat(), audit_json)
+                (user_id, ts_code, name, add_price, now.strftime("%Y-%m-%d %H:%M"), add_strategy, add_score, tag, note, now.isoformat(), audit_json)
             )
             return cur.rowcount > 0
         except sqlite3.IntegrityError:
