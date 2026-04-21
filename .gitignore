@@ -43,3 +43,26 @@ Thumbs.db
 
 # WorkBuddy workspace
 .workbuddy/
+
+# Debug / temporary files (generated during development)
+_*.py
+debug_*.py
+check_*.py
+fix_*.py
+check-*.js
+test-*.js
+find-*.js
+inject-*.js
+capture-*.js
+suspicious-patterns.js
+syntax-check.js
+validate-html.js
+split-template.js
+binary-search-template.js
+*.txt
+templates/test-*.html
+templates/debug-*.html
+templates/index.fixed.html
+
+# Backup / generated copies
+*.vue3_backup

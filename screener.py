@@ -8,12 +8,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
-import tushare as ts
 
-from config import TUSHARE_TOKEN
+# 延迟加载 Tushare：通过 helpers 的懒初始化机制，避免启动时直接导入重型依赖
+# 原 import tushare as ts → 改为从 helpers 获取已缓存的 pro 实例
+from helpers import _get_pro
 
-ts.set_token(TUSHARE_TOKEN)
-pro = ts.pro_api()
+
+def _tushare():
+    """获取 Tushare Pro API 实例（模块级快捷调用）"""
+    return _get_pro()
+
 
 # ============================================================
 # 常量
@@ -57,7 +61,7 @@ def get_latest_trade_date():
     for i in range(10):
         d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
         try:
-            df = pro.trade_cal(exchange="SSE", start_date=d, end_date=d, is_open="1")
+            df = _tushare().trade_cal(exchange="SSE", start_date=d, end_date=d, is_open="1")
             if not df.empty:
                 _cache_latest_trade_date = d
                 return d
@@ -85,7 +89,7 @@ def is_trading_hours():
     # 再验证今天是否交易日（排除节假日）
     today_str = now.strftime("%Y%m%d")
     try:
-        df = pro.trade_cal(exchange="SSE", start_date=today_str, end_date=today_str, is_open="1")
+        df = _tushare().trade_cal(exchange="SSE", start_date=today_str, end_date=today_str, is_open="1")
         return not df.empty
     except Exception:
         return True  # 查询失败时假定为交易时段
@@ -114,7 +118,7 @@ def get_recent_trade_dates(days=5):
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=max(days, 45) * 2)).strftime("%Y%m%d")
     try:
-        df = pro.trade_cal(exchange="SSE", start_date=start_date, end_date=end_date, is_open="1")
+        df = _tushare().trade_cal(exchange="SSE", start_date=start_date, end_date=end_date, is_open="1")
         if not df.empty:
             all_dates = df.sort_values("cal_date", ascending=False)["cal_date"].tolist()
             # 缓存最多60天供后续使用
@@ -192,7 +196,7 @@ def _cleanup_old_cache(cache_key, keep_days=5):
 
 def get_stock_list():
     """获取全部A股列表"""
-    df = pro.stock_basic(exchange="", list_status="L",
+    df = _tushare().stock_basic(exchange="", list_status="L",
                          fields="ts_code,symbol,name,area,industry,market,list_date")
     return df.to_dict("records")
 
@@ -204,7 +208,7 @@ def get_daily(ts_code, days=30):
         try:
             if attempt > 0:
                 time.sleep(1 * attempt)
-            df = pro.daily(ts_code=ts_code, end_date=end_date, limit=days)
+            df = _tushare().daily(ts_code=ts_code, end_date=end_date, limit=days)
             if df.empty:
                 return []
             df = df.sort_values("trade_date")
@@ -223,7 +227,7 @@ def get_daily_basic(ts_code, days=30):
         try:
             if attempt > 0:
                 time.sleep(1 * attempt)
-            df = pro.daily_basic(ts_code=ts_code, end_date=end_date, limit=days,
+            df = _tushare().daily_basic(ts_code=ts_code, end_date=end_date, limit=days,
                                  fields="ts_code,trade_date,turnover_rate,circ_mv")
             if df.empty:
                 return []
@@ -239,7 +243,7 @@ def get_daily_basic(ts_code, days=30):
 def get_index_daily(index_code="000001.SH", days=30):
     """获取大盘指数日K"""
     end_date = datetime.now().strftime("%Y%m%d")
-    df = pro.index_daily(ts_code=index_code, end_date=end_date, limit=days)
+    df = _tushare().index_daily(ts_code=index_code, end_date=end_date, limit=days)
     if df.empty:
         return []
     df = df.sort_values("trade_date")
@@ -257,7 +261,7 @@ def _build_ths_index_map():
     if _ths_index_cache:
         return _ths_index_cache
     try:
-        df = pro.ths_index(fields="ts_code,name")
+        df = _tushare().ths_index(fields="ts_code,name")
         if not df.empty:
             _ths_index_cache = dict(zip(df["ts_code"], df["name"]))
     except Exception as e:
@@ -299,7 +303,7 @@ def get_concept_board_data():
         print(f"[CACHE] 未找到板块缓存，尝试实时获取...")
 
     try:
-        df = pro.ths_daily(trade_date=trade_date,
+        df = _tushare().ths_daily(trade_date=trade_date,
                            fields="ts_code,trade_date,pct_change,close,vol,turnover_rate")
         # v3.5.2: 如果当天数据为空（盘中/刚收盘），自动尝试前一个交易日
         if df.empty:
@@ -307,7 +311,7 @@ def get_concept_board_data():
             for pd_ in prev_dates:
                 if pd_ != trade_date:
                     print(f"[WARN] ths_daily 返回空数据 ({trade_date})，尝试 {pd_}...")
-                    df = pro.ths_daily(trade_date=pd_,
+                    df = _tushare().ths_daily(trade_date=pd_,
                                        fields="ts_code,trade_date,pct_change,close,vol,turnover_rate")
                     if not df.empty:
                         trade_date = pd_
@@ -363,7 +367,7 @@ def get_batch_daily_basic(trade_date=None):
         for i in range(7):
             d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
             try:
-                df = pro.daily_basic(trade_date=d,
+                df = _tushare().daily_basic(trade_date=d,
                                      fields="ts_code,close,pct_chg,turnover_rate,circ_mv,vol,amount,pe,pb")
                 if not df.empty:
                     return df
@@ -371,7 +375,7 @@ def get_batch_daily_basic(trade_date=None):
                 continue
         return None
     try:
-        df = pro.daily_basic(trade_date=trade_date,
+        df = _tushare().daily_basic(trade_date=trade_date,
                              fields="ts_code,close,pct_chg,turnover_rate,circ_mv,vol,amount,pe,pb")
         return df
     except Exception as e:
@@ -389,7 +393,7 @@ def get_batch_daily(trade_date=None):
         for i in range(7):
             d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
             try:
-                df = pro.daily(trade_date=d,
+                df = _tushare().daily(trade_date=d,
                                fields="ts_code,open,high,low,close,vol,pct_chg,amount")
                 if not df.empty:
                     return df
@@ -397,7 +401,7 @@ def get_batch_daily(trade_date=None):
                 continue
         return None
     try:
-        df = pro.daily(trade_date=trade_date,
+        df = _tushare().daily(trade_date=trade_date,
                        fields="ts_code,open,high,low,close,vol,pct_chg,amount")
         return df
     except Exception as e:
@@ -426,7 +430,7 @@ def get_batch_daily_multi(days=45):
             df = pd.DataFrame(cached)
         else:
             try:
-                df = pro.daily(trade_date=td,
+                df = _tushare().daily(trade_date=td,
                                fields="ts_code,trade_date,open,high,low,close,vol,pct_chg")
                 if df is not None and not df.empty:
                     _save_cache(cache_key, df.to_dict("records"), td)
@@ -489,7 +493,7 @@ def get_hot_board_constituents(concept_boards, threshold_pct=0.5, max_boards=10)
             # Tushare concept_detail: 用板块 ts_code 查成分股
             # 注意：concept_detail 用的是概念 ts_code（如 885562.TI），不是 700xxx
             # 但实际 concept_detail 的 id 字段使用的是另一种编码，需要尝试
-            df = pro.concept_detail(id=board_code.replace(".TI", ""),
+            df = _tushare().concept_detail(id=board_code.replace(".TI", ""),
                                      fields="ts_code,name,concepts")
             if df is None or df.empty:
                 # 尝试直接用原始 code
@@ -531,7 +535,7 @@ def get_batch_money_flow(trade_date=None):
             return cached
 
     try:
-        df = pro.moneyflow(trade_date=trade_date,
+        df = _tushare().moneyflow(trade_date=trade_date,
                            fields="ts_code,trade_date,buy_lg_amount,sell_lg_amount,"
                                   "buy_elg_amount,sell_elg_amount,net_mf_amount")
         if df.empty:
@@ -577,7 +581,7 @@ def get_batch_money_flow_multi(days=5):
             try:
                 # v3.5.2: 取完整字段用于大单分析（首日取全部字段，后续只取net_mf节省内存）
                 fields = "ts_code,trade_date,net_mf_amount,buy_lg_amount,sell_lg_amount,buy_elg_amount,sell_elg_amount"
-                df = pro.moneyflow(trade_date=td, fields=fields)
+                df = _tushare().moneyflow(trade_date=td, fields=fields)
                 if not df.empty:
                     _save_cache(f"money_flow_batch_{td}", df.to_dict("records"), td)
                     _cleanup_old_cache(f"money_flow_batch_{td}", keep_days=3)
@@ -754,7 +758,7 @@ def preload_all_concepts():
     
     try:
         # 第1步：获取所有N类（普通概念）板块列表
-        df_idx = pro.ths_index(type="N", fields="ts_code,name")
+        df_idx = _tushare().ths_index(type="N", fields="ts_code,name")
         if df_idx is None or df_idx.empty:
             print("  [WARN] ths_index返回空，概念预加载失败，降级到逐只查询")
             _concept_bulk_loaded = True  # 标记避免重复尝试
@@ -775,7 +779,7 @@ def preload_all_concepts():
                 continue
             
             try:
-                df_member = pro.ths_member(ts_code=concept_code, fields="ts_code,con_code,con_name")
+                df_member = _tushare().ths_member(ts_code=concept_code, fields="ts_code,con_code,con_name")
                 if df_member is not None and not df_member.empty:
                     for _, row in df_member.iterrows():
                         # ths_member 返回 con_code 字段（标准格式如 000001.SZ）
@@ -800,7 +804,7 @@ def preload_all_concepts():
                     import time as _time
                     _time.sleep(60)
                     try:
-                        df_member = pro.ths_member(ts_code=concept_code, fields="ts_code,con_code,con_name")
+                        df_member = _tushare().ths_member(ts_code=concept_code, fields="ts_code,con_code,con_name")
                         if df_member is not None and not df_member.empty:
                             for _, row in df_member.iterrows():
                                 stock_code = str(row.get("con_code", row.get("ts_code", ""))).strip()
@@ -843,7 +847,7 @@ def get_stock_concepts_eastmoney(ts_code):
 
     # 方法1：Tushare concept_detail（稳定可靠）
     try:
-        df = pro.concept_detail(ts_code=ts_code, fields="ts_code,concept_name")
+        df = _tushare().concept_detail(ts_code=ts_code, fields="ts_code,concept_name")
         if not df.empty:
             raw_concepts = df["concept_name"].dropna().tolist()
             # v3.5.2: 过滤噪声标签，只保留有行业区分度的概念
@@ -860,7 +864,7 @@ def get_stock_concepts_eastmoney(ts_code):
 def get_limit_list(trade_date):
     """获取某日涨停股票列表"""
     try:
-        df = pro.limit_list_d(trade_date=trade_date,
+        df = _tushare().limit_list_d(trade_date=trade_date,
                               fields="ts_code,trade_date,name,close,open,amount,limit_amount,pct_chg,first_time,last_time,open_times,limit,fd_amount")
         if df.empty:
             return []
@@ -877,7 +881,7 @@ def get_market_sentiment():
     """
     try:
         trade_date = get_latest_trade_date()
-        df = pro.limit_list_d(trade_date=trade_date, fields="ts_code,trade_date,name,pct_chg,limit")
+        df = _tushare().limit_list_d(trade_date=trade_date, fields="ts_code,trade_date,name,pct_chg,limit")
         if not df.empty:
             # limit=U表示涨停，D表示跌停
             limit_up = len(df[df["limit"] == "U"])
@@ -2791,7 +2795,7 @@ def _get_board_stocks_fast(board_code, board_name, market_df, stock_info_map, li
     
     try:
         # 获取该板块的成分股（使用ths_member）
-        df_member = pro.ths_member(ts_code=board_code, fields="ts_code,con_code,con_name")
+        df_member = _tushare().ths_member(ts_code=board_code, fields="ts_code,con_code,con_name")
         if df_member is None or df_member.empty:
             if not silent:
                 print(f"    → [WARN] 板块 {board_name} 无成分股数据")
