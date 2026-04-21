@@ -55,12 +55,20 @@ app.register_blueprint(data_bp)
 def index():
     return send_from_directory("templates", "index.html")
 
+@app.route("/test-vue")
+def test_vue():
+    return send_from_directory("templates", "test-vue.html")
+
+@app.route("/debug-mount")
+def debug_mount():
+    return send_from_directory("templates", "debug-mount.html")
+
 
 @app.after_request
 def add_cache_headers(response):
-    """静态资源加缓存头，减少重复请求"""
-    if response.content_type and any(t in response.content_type for t in ("javascript", "css", "font")):
-        response.headers["Cache-Control"] = "public, max-age=3600"
+    """[dev] 开发模式不缓存，生产环境可开启"""
+    if response.content_type and any(t in response.content_type for t in ("javascript", "css", "font", "html")):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
 

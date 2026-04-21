@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>A股个人投资助手</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20">
+    <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -75,11 +75,11 @@
         <div :class="['index-card', indexSource!=='tushare'?'live':'']" v-for="(idx,code) in indexData" :key="code">
             <div>
                 <div class="name">{{idx.name}}</div>
-                <div class="price" :class="idx.pct_chg>=0?'text-red':'text-green'">{{idx.price?.toFixed(2)||'-'}}</div>
+                <div class="price" :class="idx.pct_chg>=0?'text-red':'text-green'">{{idx.price && idx.price.toFixed(2) || '-'}}</div>
             </div>
             <div style="text-align:right">
-                <div class="change" :class="idx.pct_chg>=0?'text-red':'text-green'">{{idx.pct_chg>=0?'+':''}}{{idx.pct_chg?.toFixed(2)}}%</div>
-                <div class="change" style="color:var(--text-muted)">{{idx.change>=0?'+':''}}{{idx.change?.toFixed(2)}}</div>
+                <div class="change" :class="idx.pct_chg>=0?'text-red':'text-green'">{{idx.pct_chg>=0?'+':''}}{{idx.pct_chg && idx.pct_chg.toFixed(2)}}%</div>
+                <div class="change" style="color:var(--text-muted)">{{idx.change>=0?'+':''}}{{idx.change && idx.change.toFixed(2)}}</div>
                 <!-- 高低点结构标签 -->
                 <div v-if="idx.hl_structure" :class="['hl-tag', 'hl-'+idx.hl_structure.structure]" :title="idx.hl_structure.signal">
                     {{idx.hl_structure.structure==='uptrend'?'↗ 上升':idx.hl_structure.structure==='downtrend'?'↘ 下降':'→ 震荡'}}
@@ -273,24 +273,6 @@
 
     <!-- Tab: 选股 -->
     <div :class="['tab-content',activeTab==='screener'?'active':'']">
-        <!-- 大盘环境 -->
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">
-            <div class="summary-card">
-                <div class="label">🌍 大盘环境</div>
-                <div class="value" :class="screenMarket&&screenMarket.status==='上升'?'text-red':screenMarket&&screenMarket.status==='下降'?'text-green':'text-yellow'">{{screenMarket?(screenMarket.status==='上升'?'📈 上升':screenMarket.status==='震荡'?'➡️ 震荡':'📉 下降'):'-'}}</div>
-                <div class="sub" v-if="screenMarket">{{screenMarket.description}}</div>
-            </div>
-            <div class="summary-card">
-                <div class="label">🎯 符合条件</div>
-                <div class="value text-blue">{{screenStats?screenStats.final_count:'-'}} <span style="font-size:14px;color:var(--text-secondary)">只</span></div>
-                <div class="sub" v-if="screenStats">全市场 {{screenStats.total_stocks||0}} 只筛选</div>
-            </div>
-            <div class="summary-card">
-                <div class="label">⏱️ 上次运行</div>
-                <div class="value" style="font-size:18px">{{screenInfo.lastRun||'未运行'}}</div>
-                <div class="sub">{{screenInfo.runTime?`耗时 ${screenInfo.runTime}s`:''}}</div>
-            </div>
-        </div>
         <!-- 策略推荐提示 -->
         <div v-if="screenStrategyReason" style="background:var(--blue-bg);border:1px solid rgba(78,130,200,0.3);border-radius:var(--radius-sm);padding:8px 14px;margin-bottom:12px;font-size:12px;color:var(--blue)">
             🤖 智能推荐：{{screenStrategyReason}}
@@ -318,20 +300,53 @@
                 <div v-if="currentStrategy===key" class="strategy-details">
                     <div class="strategy-tags">
                         <template v-if="key==='trend_break'">
-                            <span class="tag"><span class="tag-icon">📌</span>买入信号：MA20站稳+MACD金叉+放量确认+三看通过+板块效应</span>
+                            <span class="tag"><span class="tag-icon">📌</span>买入信号：①趋势面(~37分)MA20位置(5)+方向(4)+HL结构(4)+MACD状态(0~12)+均线多头(0~10)；②板块(15分)相对超额收益+概念热度排名；③资金(10分)主力净流入+大单结构+持续性；④共振(15分)三看共振(全过15/二看9/一看5)；⑤催化(10分)业绩预告/回购/涨停/缩量回踩</span>
                             <span class="tag"><span class="tag-icon">⏱️</span>持股周期：3-10个交易日</span>
                             <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破MA20或亏损8%</span>
                         </template>
                         <template v-else-if="key==='sector_leader'">
-                            <span class="tag"><span class="tag-icon">📌</span>买入信号：板块涨>2%+个股涨幅5-9.5%+换手5-15%+资金流入；加分：三看确认+10分</span>
-                            <span class="tag"><span class="tag-icon">⏱️</span>持股周期：1-5个交易日</span>
-                            <span class="tag"><span class="tag-icon">🛡️</span>止损位：次日跌破分时均线或亏损5%</span>
+                            <span class="tag"><span class="tag-icon">📌</span>极简逻辑：板块Top5 x 个股Top5；二值判断：龙头或观察</span>
+                            <span class="tag"><span class="tag-icon">⏱️</span>持股周期：1-3个交易日</span>
+                            <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破板块平均涨幅或亏损5%</span>
                         </template>
                         <template v-else-if="key==='oversold_bounce'">
-                            <span class="tag"><span class="tag-icon">📌</span>买入信号：近20日跌幅>阈值+止跌信号（长下影线/放量/MACD金叉）+技术改善（MA金叉/阳线/放量）</span>
+                            <span class="tag"><span class="tag-icon">📌</span>买入信号：①趋势(35分)跌幅分级(<-50=20/~-40=17/~-30=13/~-25=10/-20~=-7)+三重止跌信号(3/2/1)；②板块(15/5分)命中热门概念=15否则=5；③资金(15分)净流入(+10)+连续≥3天(+5)+占比>1%(+5)；④加分(15分)市值区间(10)+业绩预增(+3)+回购>1亿(+2)；⑤技术改善(15分)MA5上穿MA20+显著放量(量比≥2.0)+阳线(>0.5%)；⑥HL结构(-5~10)低点抬高=+10/创新低=-5</span>
                             <span class="tag"><span class="tag-icon">⏱️</span>持股周期：5-20个交易日</span>
                             <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破近期新低或亏损10%</span>
                         </template>
+                    </div>
+                </div>
+                <!-- 执行摘要区（始终可见） -->
+                <div v-if="getStrategySummary(key)" class="strategy-exec-summary">
+                    <div class="exec-row">
+                        <span class="exec-label">📊 结果</span>
+                        <span class="exec-value text-blue">{{getStrategySummary(key).count}}只</span>
+                        <span class="exec-label" style="margin-left:auto">🕐</span>
+                        <span class="exec-value">{{getStrategySummary(key).lastRun}}</span>
+                    </div>
+                    <div class="exec-row">
+                        <span class="exec-label">⏱️ 耗时</span>
+                        <span class="exec-value">{{getStrategySummary(key).duration}}s</span>
+                        <span class="exec-label" style="margin-left:auto">🏆 最高分</span>
+                        <span class="exec-value" :class="getStrategySummary(key).topScore>=75?'text-red':getStrategySummary(key).topScore>=60?'text-yellow':'text-green'">{{getStrategySummary(key).topScore}}</span>
+                    </div>
+                    <button v-if="currentStrategy!==key" class="exec-view-btn" @click.stop="viewStrategyResult(key)">
+                        👁 查看此策略结果
+                    </button>
+                </div>
+                <!-- 运行中状态 -->
+                <div v-else-if="runningStrategies.includes(key)" class="strategy-exec-summary">
+                    <div class="exec-running">
+                        <span class="pulse-dot"></span><span>筛选进行中...</span>
+                        <div class="progress-bar"><div class="progress-fill"></div></div>
+                    </div>
+                </div>
+                <div v-else class="strategy-exec-summary">
+                    <div class="exec-empty">
+                        <span class="exec-label" style="color:var(--text-muted)">暂无运行记录</span>
+                        <button v-if="currentStrategy!==key" class="exec-run-btn" @click.stop="selectAndRun(key)">
+                            ▶ 立即运行
+                        </button>
                     </div>
                 </div>
             </div>
@@ -341,35 +356,13 @@
             <button class="btn btn-primary" @click="startScreen" :disabled="screenInfo.running">
                 {{screenInfo.running?'⏳ 筛选进行中...':strategyListSafe[currentStrategy]?strategyListSafe[currentStrategy].icon+' '+strategyListSafe[currentStrategy].name:'🔍 开始选股筛选'}}
             </button>
-            <!-- 策略胜率提示（小优化） -->
-            <button v-if="!screenInfo.running&&spData&&spData[currentStrategy]" 
-                    class="btn" 
-                    :style="{background:'var(--bg-card)',border:'1px solid '+(spData[currentStrategy].win_rate>=50?'var(--red)':'var(--yellow)'),color:spData[currentStrategy].win_rate>=50?'var(--red)':'var(--yellow)',fontSize:'12px',padding:'6px 12px',marginLeft:'8px'}"
-                    @click="switchToStrategy"
-                    title="点击查看该策略详细回测数据">
-                {{spData[currentStrategy].win_rate>=50?'📈':'📉'}} 近5天胜率 {{spData[currentStrategy].win_rate}}%
-            </button>
-            <!-- 策略效果加载按钮（懒加载） -->
-            <button v-else-if="!spLoading" class="btn btn-sm" style="margin-left:8px;background:var(--bg-card);border:1px solid var(--blue);color:var(--blue)" @click="loadStrategyPerformance(true)" title="点击查看策略胜率统计">
-                📊 查看胜率
-            </button>
-            <!-- 加载中状态 -->
-            <span v-else style="color:var(--text-muted);font-size:12px;margin-left:8px;display:inline-flex;align-items:center;gap:6px">
-                <span style="display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin 1s linear infinite"></span>
-                计算中...
-            </span>
+
             <!-- 错误提示 -->
             <span v-if="spError" style="color:var(--red);font-size:12px;margin-left:8px">{{spError}}</span>
-            <button v-if="!screenInfo.running&&currentStrategy==='oversold_bounce'" class="btn" style="background:var(--bg-card);border:1px solid var(--yellow);color:var(--yellow);font-size:12px;padding:6px 12px;margin-left:8px" @click="startScreenForce" title="超跌反弹策略专用：大盘下降时可逆向选股，用于捕捉抄底机会">
-                🧪 强制测试筛选
-            </button>
             <span v-if="screenInfo.running" style="color:var(--yellow);font-size:13px;animation:alertPulse 1.5s infinite">预计需要3-5分钟，请耐心等待...</span>
             <span v-if="screenInfo.hasResult&&!screenInfo.running" style="color:var(--green);font-size:13px">✅ 筛选完成</span>
         </div>
-        <!-- 大盘下降提示 -->
-        <div v-if="screenMarket&&screenMarket.status==='下降'&&screenStats&&screenStats.message" style="background:rgba(255,165,0,0.1);border:1px solid var(--yellow);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:var(--yellow)">
-            ⚠️ {{screenStats.message}} — 如需测试选股逻辑，可点击「强制测试筛选」
-        </div>
+        <!-- [已移除] 大盘下降提示条：信息冗余，整合进智能推荐提示条 -->
         <!-- 数据质量警告 -->
         <div v-if="screenStats&&screenStats.data_warnings&&screenStats.data_warnings.length>0" style="background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.3);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px">
             <div v-for="w in screenStats.data_warnings" :key="w" style="display:flex;align-items:flex-start;gap:6px;margin-bottom:4px;color:var(--yellow)">
@@ -387,11 +380,18 @@
             <span style="background:var(--bg-card);border:1px solid var(--border);padding:4px 12px;border-radius:20px">板块资金 <b>{{screenStats.after_sector}}</b></span>
             <span style="color:var(--text-muted)">→</span>
             <span style="background:var(--blue-bg);border:1px solid var(--blue);padding:4px 12px;border-radius:20px;color:var(--blue)"><b>{{screenStats.final_count}}</b> 只入选</span>
+            <!-- ★ 动态门槛显示 -->
+            <span v-if="screenStats.dynamic_threshold" :style="{background: screenStats.dynamic_threshold.threshold>=70 ? 'rgba(0,200,83,0.08)' : 'rgba(255,165,0,0.08)', border: '1px solid ' + (screenStats.dynamic_threshold.threshold>=70 ? 'rgba(0,200,83,0.3)' : 'rgba(255,165,0,0.3)'), padding:'4px 12px',borderRadius:'20px',color: screenStats.dynamic_threshold.threshold>=70 ? 'var(--green)' : 'var(--yellow)',fontSize:'11px'}">
+                🎯 {{screenStats.dynamic_threshold.market_status}}市 · 门槛{{screenStats.dynamic_threshold.threshold}}分
+            </span>
         </div>
         <!-- 选股消息 -->
         <div v-if="screenStats&&screenStats.message&&!screenStats.final_count" class="empty-state" style="padding:30px">
             <div class="icon">🤷</div>
             <p>{{screenStats.message}}</p>
+            <p v-if="screenStats.dynamic_threshold&&screenStats.dynamic_threshold.threshold<60" style="font-size:12px;color:var(--text-muted);margin-top:8px">
+                💡 当前为{{screenStats.dynamic_threshold.market_status}}市场，门槛已自动降至{{screenStats.dynamic_threshold.threshold}}分。如仍无结果，建议切换「板块龙头」或「超跌反弹」策略。
+            </p>
         </div>
         <!-- 结果表格 -->
         <div class="table-wrapper" v-if="screenResults.length>0">
@@ -415,11 +415,11 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <template v-for="(r,idx) in screenResults.slice(0, 10)" :key="r.ts_code">
+                        <template v-for="(r,idx) in screenResults.slice(0, 10)">
                             <!-- 主行 -->
-                            <tr class="screen-row" :class="{'screen-row-hot':r.total_score>=60,'screen-row-expanded':expandedScreenRow===r.ts_code}" @click="toggleScreenRow(r.ts_code)">
+                            <tr class="screen-row" :key="r.ts_code" :class="{'screen-row-hot':r.total_score>=60||r.recommendation==='龙头','screen-row-expanded':expandedScreenRow===r.ts_code}" @click="toggleScreenRow(r.ts_code)">
                                 <td>
-                                    <span class="screen-rank" :class="r.total_score>=60?'hot':'normal'">{{r.total_score>=60?'🔥':'⚡'}} #{{idx+1}}</span>
+                                    <span class="screen-rank" :class="r.recommendation==='龙头'?'hot':''">{{r.recommendation==='龙头'?'★':(r.total_score>=60?'🔥':'⚡')}} #{{idx+1}}</span>
                                 </td>
                                 <td>
                                     <div class="screen-stock">
@@ -435,10 +435,13 @@
                                     </div>
                                 </td>
                                 <td style="text-align:center">
-                                    <span class="screen-score" :class="r.total_score>=60?'hot':'normal'">{{r.total_score}}</span>
+                                    <span v-if="r.total_score!==undefined" class="screen-score" :class="r.total_score>=60?'hot':'normal'">{{r.total_score}}</span>
+                                    <span v-else-if="r.recommendation" :class="['screen-score', r.recommendation==='龙头'?'hot':'']">{{r.recommendation}}</span>
+                                    <span v-else class="screen-score">—</span>
                                 </td>
                                 <td style="text-align:right">
                                     <div class="screen-actions" @click.stop>
+                                        <button class="btn btn-xs btn-icon" @click="showAuditDetail(r)" title="查看筛选审计">🔍</button>
                                         <button class="btn btn-xs btn-icon" @click="addToWatch(r)" title="加入观察池">👀</button>
                                         <button class="btn btn-xs btn-primary" @click="quickBuyFromScreen(r)">买入</button>
                                     </div>
@@ -449,15 +452,25 @@
                                 <td colspan="5">
                                     <div class="screen-detail-content">
                                         <div class="screen-detail-grid">
-                                            <!-- 评分明细 -->
+                                            <!-- 评分明细（极简版龙头策略无评分） -->
                                             <div class="detail-section">
                                                 <div class="detail-title">📊 评分明细</div>
                                                 <div class="detail-scores">
                                                     <template v-if="currentStrategy==='sector_leader'">
-                                                        <div class="score-item"><span class="score-label">涨换</span><span class="score-value">{{r.trend_score}}</span></div>
-                                                        <div class="score-item"><span class="score-label">板块</span><span class="score-value">{{r.sector_score}}</span></div>
-                                                        <div class="score-item"><span class="score-label">资金</span><span class="score-value">{{r.money_score}}</span></div>
-                                                        <div class="score-item"><span class="score-label">加分</span><span class="score-value">{{r.bonus_score}}</span></div>
+                                                        <!-- 极简版：二值判断卡片 -->
+                                                        <div style="grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:12px;background:var(--bg-main);border-radius:8px;border:1px solid var(--border);margin-bottom:6px">
+                                                            <span :class="['sl-rec-badge', r.recommendation==='龙头'?'leader':'watch']">{{r.recommendation==='龙头'?'龙头':'观察'}}</span>
+                                                            <div style="flex:1">
+                                                                <div style="font-size:13px;font-weight:500;color:var(--text-primary)">{{r.reason||'—'}}</div>
+                                                                <div style="font-size:11px;color:var(--text-muted);margin-top:3px">板块内排名 #{{r.board_rank||'—'}} | 换手{{r.turnover_rate||0}}% | 市值{{r.circ_mv_yi||0}}亿</div>
+                                                            </div>
+                                                        </div>
+                                                        <!-- 审计快照 -->
+                                                        <div v-if="r.match_audit?.gates?.length" style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+                                                            <span v-for="(g,gi) in r.match_audit.gates" :key="gi" class="sl-gate-tag" :class="{passed:g.passed}">
+                                                                {{g.name}}: {{g.actual}}
+                                                            </span>
+                                                        </div>
                                                     </template>
                                                     <template v-else-if="currentStrategy==='oversold_bounce'">
                                                         <div class="score-item"><span class="score-label">跌幅/信号</span><span class="score-value">{{r.trend_score}}</span></div>
@@ -618,7 +631,7 @@
                     <h3>📊 连板梯队</h3>
                     <div v-if="limitStepLoading" style="text-align:center;padding:20px;color:var(--text-muted)">⏳ 加载中...</div>
                     <div v-else-if="limitStepData && limitStepData.step_groups">
-                        <div v-for="(items,days) in Object.keys(limitStepData.step_groups).sort((a,b)=>b-a).slice(0,8)" :key="days" style="margin-bottom:10px">
+                        <div v-for="(items,days) in Object.keys(limitStepData.step_groups).sort((a,b)=>b - a).slice(0,8)" :key="days" style="margin-bottom:10px">
                             <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">{{days}}连板（{{limitStepData.step_groups[days].length}}只）</div>
                             <div style="display:flex;gap:6px;flex-wrap:wrap">
                                 <span v-for="s in limitStepData.step_groups[days]" :key="s.ts_code"
@@ -1036,19 +1049,19 @@
     <!-- 顶部概览卡片 -->
     <div class="stats-grid" v-if="watchItems.length>0">
         <div class="stat-card">
-            <div class="stat-label">👀 观察中</div>
-            <div class="stat-value text-blue">{{watchItems.length}}</div>
-            <div class="stat-sub">{{watchStats.profit}}涨 {{watchStats.loss}}跌</div>
+            <div class="stat-label">👀 观察中 <span v-if="watchFilter!=='all'" style="font-size:11px;color:var(--primary);font-weight:600">{{watchStats.filterLabel}}</span></div>
+            <div class="stat-value text-blue">{{watchStats.count}}</div>
+            <div class="stat-sub">{{watchStats.profit}}涨 {{watchStats.loss}}跌{{watchStats.flat>0?' · '+watchStats.flat+'平':''}}{{watchStats.noData>0?' · '+watchStats.noData+'无数据':''}}{{watchFilter!=='all'?' / 共'+watchStats.totalCount+'只':''}}</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" style="cursor:pointer;transition:background 0.2s" @click="watchFilter=watchFilter==='profit'?'all':'profit'" :title="watchFilter!=='all'?'点击取消筛选':'点击仅看盈利'">
             <div class="stat-label">📊 平均收益</div>
             <div class="stat-value" :class="watchStats.avg_chg>=0?'text-red':'text-green'">{{watchStats.avg_chg>=0?'+':''}}{{watchStats.avg_chg}}%</div>
-            <div class="stat-sub">自加入以来</div>
+            <div class="stat-sub">{{watchFilter==='all'?'全部':watchStats.count+'只'}}<span v-if="watchFilter!=='all' && watchStats.count!==watchStats.totalCount"> / 共{{watchStats.totalCount}}只</span></div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" style="cursor:pointer;transition:background 0.2s" @click="watchFilter=watchFilter==='loss'?'all':'loss'" :title="watchFilter!=='all'?'点击取消筛选':'点击仅看亏损'">
             <div class="stat-label">🎯 策略胜率</div>
-            <div class="stat-value" :class="watchStats.win_rate>=50?'text-red':'text-green'">{{watchStats.win_rate||0}}%</div>
-            <div class="stat-sub">盈利占比</div>
+            <div class="stat-value" :class="watchStats.win_rate>=50?'text-red':'text-green'">{{watchStats.win_rate}}%</div>
+            <div class="stat-sub">盈利{{watchStats.profit}}/{{watchStats.profit+watchStats.loss+watchStats.flat}}只有效</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">⏰ 最新更新</div>
@@ -1077,8 +1090,6 @@
         <div style="display:flex;gap:10px;align-items:center;margin-left:auto">
             <div class="search-box"><input v-model="watchSearch" placeholder="搜索股票..." style="width:140px"></div>
             <button class="btn btn-xs" @click="refreshWatchData" :disabled="watchLoading" title="刷新行情">🔄</button>
-            <button class="btn btn-xs" @click="loadWatchReport" style="color:var(--blue)" title="查看日报">📊 日报</button>
-            <button class="btn btn-xs btn-danger" @click="clearWatchList" :disabled="watchItems.length===0">🗑</button>
         </div>
     </div>
 
@@ -1134,6 +1145,7 @@
             
             <!-- 操作按钮 -->
             <div style="display:flex;gap:6px">
+                <button class="btn btn-xs" @click="showAuditDetail(w)" :title="w.match_audit?'查看筛选审计':'手动添加，无筛选审计'" :style="w.match_audit?'flex:1;font-size:12px;background:rgba(168,85,247,0.15);color:#c084fc;border:none':'flex:1;font-size:12px;background:rgba(168,85,247,0.08);color:rgba(168,85,247,0.5);border:none'">🔍 审计</button>
                 <button class="btn btn-xs" @click="openWatchStrategyModal(w)" title="策略建议" style="flex:1;font-size:12px;background:rgba(59,130,246,0.15);color:#60a5fa;border:none">📋 策略</button>
                 <button class="btn btn-xs" @click="openStockFinanceModal(w.ts_code,w.name)" title="财务分析" style="flex:1;font-size:12px;background:rgba(16,185,129,0.15);color:#34d399;border:none">📊 财务</button>
                 <button class="btn btn-xs" @click="openKlineModalForWatch(w)" title="K线走势" style="flex:1;font-size:12px;background:rgba(245,158,11,0.15);color:#f59e0b;border:none">📈 K线</button>
@@ -1477,7 +1489,7 @@
         </div>
         <!-- 涨跌幅排名 -->
         <div class="stats-grid">
-            <div v-for="(s,i) in [...compareData.stocks].sort((a,b)=>(b.pct_total||0)-(a.pct_total||0))" :key="s.ts_code" class="stat-card">
+            <div v-for="(s,i) in [...compareData.stocks].sort((a,b)=>(b.pct_total||0) - (a.pct_total||0))" :key="s.ts_code" class="stat-card">
                 <div class="stat-label" style="font-size:11px">{{i===0?'🥇 最强':i===1?'🥈':i===2?'🥉':'④'}} {{s.name}}</div>
                 <div class="stat-value" :class="(s.pct_total||0)>=0?'text-red':'text-green'">{{(s.pct_total||0)>=0?'+':''}}{{s.pct_total}}%</div>
             </div>
@@ -1503,98 +1515,152 @@
     </div>
     <div class="form-row"><div class="form-group"><label>买入价格 (¥)</label><input v-model.number="addForm.buy_price" type="number" step="0.001" placeholder="0.000"></div><div class="form-group"><label>买入数量 (股)</label><input v-model.number="addForm.buy_volume" type="number" step="100" placeholder="0"></div></div>
     <div class="form-row"><div class="form-group"><label>买入日期</label><input v-model="addForm.buy_date" type="date"></div><div class="form-group"><label>手续费 (¥)</label><input v-model.number="addForm.fee" type="number" step="0.01" placeholder="0.00"></div></div>
-    <!-- 三看确认区域 -->
+    <!-- 三看确认区域（v4.0 紧凑版） -->
     <div class="form-group" style="background:var(--bg-card);padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-        <label style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
-            <span style="font-weight:600;color:var(--primary)">📋 三看确认</span>
-            <span style="color:var(--text-muted);font-weight:normal;font-size:12px">（系统自动检查）</span>
-            <span v-if="threeViewsLoading" style="font-size:12px;color:var(--primary)">⏳ 检查中...</span>
-        </label>
+        <!-- 标题行 -->
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <span style="font-weight:600;font-size:14px;color:var(--primary)">三看确认</span>
+            <span style="color:var(--text-muted);font-size:11px">系统自动检查</span>
+            <span v-if="threeViewsLoading" style="font-size:11px;color:var(--primary);margin-left:auto">检查中...</span>
+        </div>
 
-        <!-- 检查结果概览 -->
-        <div v-if="threeViewsCheck" style="margin-bottom:12px;padding:12px;border-radius:8px" :style="threeViewsCheck.summary?.all_passed?'background:rgba(34,197,94,0.1);border:1px solid var(--success)':'background:rgba(245,158,11,0.1);border:1px solid var(--warning)'">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                <span style="font-size:18px">{{threeViewsCheck.summary?.all_passed?'✅':'⚠️'}}</span>
-                <span style="font-weight:600" :style="threeViewsCheck.summary?.all_passed?'color:var(--success)':'color:var(--warning)'">
-                    {{threeViewsCheck.summary?.recommendation}}
-                </span>
-            </div>
-            <div style="font-size:13px;color:var(--text-secondary)">
-                {{threeViewsCheck.name}} ({{threeViewsCheck.ts_code}}) 最新价: ¥{{threeViewsCheck.realtime_price||threeViewsCheck.close}} <span v-if="threeViewsCheck.data_source" style="font-size:11px;opacity:0.6">· {{threeViewsCheck.data_source==='sina'?'新浪实时':threeViewsCheck.data_source==='eastmoney'?'东财实时':'Tushare历史'}}</span> | {{threeViewsCheck.summary?.suggestion}}
-            </div>
-            <div style="margin-top:8px;display:flex;gap:12px;font-size:12px">
-                <span :style="threeViewsCheck.checks?.high_low?.passed?'color:var(--success)':'color:var(--text-muted)'">
-                    {{threeViewsCheck.checks?.high_low?.passed?'✓':'○'}} 高低点
-                </span>
-                <span :style="threeViewsCheck.checks?.ma?.passed?'color:var(--success)':'color:var(--text-muted)'">
-                    {{threeViewsCheck.checks?.ma?.passed?'✓':'○'}} 均线
-                </span>
-                <span :style="threeViewsCheck.checks?.volume?.passed?'color:var(--success)':'color:var(--text-muted)'">
-                    {{threeViewsCheck.checks?.volume?.passed?'✓':'○'}} 量价
-                </span>
+        <!-- 未选股/加载中提示 -->
+        <div v-if="!threeViewsCheck&&!threeViewsLoading" style="text-align:center;color:var(--text-muted);font-size:12px;padding:16px 0">
+            <div v-if="!addForm.ts_code || addForm.ts_code.length<6">📋 输入股票代码后自动触发检查</div>
+            <div v-else style="display:flex;align-items:center;justify-content:center;gap:8px">
+                <span class="loading-dot"></span>
+                <span>正在获取 {{addForm.ts_code}} 的三看数据...</span>
             </div>
         </div>
 
-        <div v-if="threeViewsError" style="margin-bottom:12px;padding:10px;background:rgba(239,68,68,0.1);border-radius:6px;border-left:3px solid var(--danger)">
-            <span style="color:var(--danger);font-size:13px">❌ {{threeViewsError}}</span>
+        <!-- 加载中骨架 -->
+        <div v-if="threeViewsLoading && !threeViewsCheck" style="display:flex;flex-direction:column;gap:8px;padding:4px 0">
+            <div style="height:36px;background:var(--bg);border-radius:6px;animation:pulse 1.5s infinite"></div>
+            <div style="height:44px;background:var(--bg);border-radius:6px;animation:pulse 1.5s infinite 0.2s"></div>
+            <div style="height:44px;background:var(--bg);border-radius:6px;animation:pulse 1.5s infinite 0.4s"></div>
+            <div style="height:44px;background:var(--bg);border-radius:6px;animation:pulse 1.5s infinite 0.6s"></div>
         </div>
 
-        <!-- 详细检查结果 -->
-        <div v-if="threeViewsCheck" style="display:flex;flex-direction:column;gap:10px">
-            <!-- 一看：高低点抬高 -->
-            <div style="padding:12px;border-radius:8px;border:1px solid var(--border)" :style="threeViewsCheck.checks?.high_low?.passed?'border-color:var(--success);background:rgba(34,197,94,0.05)':'border-color:var(--border);background:var(--bg-main)'">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                    <span style="font-size:16px">{{threeViewsCheck.checks?.high_low?.passed?'✅':'❌'}}</span>
-                    <span style="font-weight:500">一看：{{threeViewsCheck.checks?.high_low?.description}}</span>
+        <!-- 错误提示 -->
+        <div v-if="threeViewsError" style="padding:8px 12px;background:rgba(239,68,68,0.08);border-radius:6px;border-left:3px solid var(--danger);margin-bottom:10px">
+            <span style="color:var(--danger);font-size:12px">{{threeViewsError}}</span>
+        </div>
+
+        <!-- 检查结果（有数据时） -->
+        <template v-if="threeViewsCheck">
+            <!-- 总览卡片 -->
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;margin-bottom:10px" :style="threeViewsCheck.summary?.all_passed?'background:rgba(34,197,94,0.08)':'background:rgba(245,158,11,0.08)'">
+                <span class="threeview-status-dot" :class="threeViewsCheck.summary?.all_passed?'pass':'warn'"></span>
+                <span style="flex:1">
+                    <b style="font-size:13px" :style="threeViewsCheck.summary?.all_passed?'color:var(--success)':'color:var(--warning)'">{{threeViewsCheck.summary?.recommendation}}</b>
+                </span>
+                <span style="font-size:11px;color:var(--text-muted)">{{threeViewsCheck.name}} · ¥{{threeViewsCheck.realtime_price||threeViewsCheck.close}}</span>
+            </div>
+
+            <!-- 三项指标 - 横排紧凑卡片 -->
+            <div style="display:flex;flex-direction:column;gap:7px">
+                <!-- 一看：高低点 -->
+                <div class="threeview-item" :class="{passed: threeViewsCheck.checks?.high_low?.passed}">
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <span class="threeview-icon" :class="{pass: threeViewsCheck.checks?.high_low?.passed}">{{threeViewsCheck.checks?.high_low?.passed?'1':'!'}}</span>
+                        <span style="font-weight:500;font-size:13px">高低点</span>
+                        <span class="threeview-badge" :class="threeViewsCheck.checks?.high_low?.passed?'pass':'fail'">{{threeViewsCheck.checks?.high_low?.passed?'通过':'注意'}}</span>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;line-height:1.5">{{threeViewsCheck.checks?.high_low?.detail||'—'}}</div>
                 </div>
-                <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
-                    {{threeViewsCheck.checks?.high_low?.detail}}
+
+                <!-- 二看：均线排列 -->
+                <div class="threeview-item" :class="{passed: threeViewsCheck.checks?.ma?.passed}">
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <span class="threeview-icon" :class="{pass: threeViewsCheck.checks?.ma?.passed}">{{threeViewsCheck.checks?.ma?.passed?'2':'!'}}</span>
+                        <span style="font-weight:500;font-size:13px">均线</span>
+                        <span class="threeview-badge" :class="threeViewsCheck.checks?.ma?.passed?'pass':'fail'">{{threeViewsCheck.checks?.ma?.passed?'通过':'偏离'}}</span>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;line-height:1.5">{{threeViewsCheck.checks?.ma?.detail||'—'}}</div>
+                </div>
+
+                <!-- 三看：量价配合 -->
+                <div class="threeview-item" :class="{passed: threeViewsCheck.checks?.volume?.passed}">
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <span class="threeview-icon" :class="{pass: threeViewsCheck.checks?.volume?.passed}">{{threeViewsCheck.checks?.volume?.passed?'3':'!'}}</span>
+                        <span style="font-weight:500;font-size:13px">量价</span>
+                        <span class="threeview-badge" :class="threeViewsCheck.checks?.volume?.passed?'pass':'fail'">{{threeViewsCheck.checks?.volume?.passed?'正常':'不足'}}</span>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;line-height:1.5">{{threeViewsCheck.checks?.volume?.detail||'—'}}</div>
                 </div>
             </div>
-            <!-- 二看：均线多头排列 -->
-            <div style="padding:12px;border-radius:8px;border:1px solid var(--border)" :style="threeViewsCheck.checks?.ma?.passed?'border-color:var(--success);background:rgba(34,197,94,0.05)':'border-color:var(--border);background:var(--bg-main)'">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                    <span style="font-size:16px">{{threeViewsCheck.checks?.ma?.passed?'✅':'❌'}}</span>
-                    <span style="font-weight:500">二看：{{threeViewsCheck.checks?.ma?.description}}</span>
-                </div>
-                <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
-                    {{threeViewsCheck.checks?.ma?.detail}}
-                </div>
-            </div>
-            <!-- 三看：量价配合 -->
-            <div style="padding:12px;border-radius:8px;border:1px solid var(--border)" :style="threeViewsCheck.checks?.volume?.passed?'border-color:var(--success);background:rgba(34,197,94,0.05)':'border-color:var(--border);background:var(--bg-main)'">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                    <span style="font-size:16px">{{threeViewsCheck.checks?.volume?.passed?'✅':'❌'}}</span>
-                    <span style="font-weight:500">三看：{{threeViewsCheck.checks?.volume?.description}}</span>
-                </div>
-                <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
-                    {{threeViewsCheck.checks?.volume?.detail}}
-                </div>
+
+            <!-- 用户确认区 -->
+            <label class="sell-confirm-check" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:12px">
+                <input type="checkbox" v-model="buyConfirmedCheck" style="width:14px;height:14px;accent-color:var(--success)">
+                <span>已查看三看结果，确认执行买入</span>
+            </label>
+        </template>
+    </div>
+
+    <!-- [P1-6] 买入价格参考位（无成本基准，纯市场数据） -->
+    <div class="sell-check-section" v-if="threeViewsCheck?.buy_price_anchors?.buy_zone">
+        <div class="sell-check-title"><span class="check-icon">🎯</span> 建议买入价位 <span class="check-hint">(点击填入买入价格)</span></div>
+
+        <!-- 当前价 -->
+        <div style="text-align:center;margin-bottom:10px">
+            <button @click="pickBuyPrice(threeViewsCheck.buy_price_anchors.latest)" 
+                    class="price-current-btn" :class="{active:addForm.buy_price===threeViewsCheck.buy_price_anchors.latest}">
+                现价 ¥{{threeViewsCheck.buy_price_anchors.latest}}
+                <span class="source-badge" :title="'数据源:'+threeViewsCheck.data_source">{{threeViewsCheck.data_source==='sina'?'新浪实时':'Tushare'}}</span>
+            </button>
+        </div>
+
+        <!-- 买入区间 -->
+        <div class="price-grid-row">
+            <div class="pg-label-col">买入区间<br><small>(回调/突破)</small></div>
+            <div class="pg-btns">
+                <a href="#" @click.prevent="pickBuyPrice(threeViewsCheck.buy_price_anchors.buy_zone.low)"
+                   class="price-ref-btn support" :class="{active:addForm.buy_price===threeViewsCheck.buy_price_anchors.buy_zone.low}">
+                    <span class="pr-label">回调介入</span>
+                    <span class="pr-price">¥{{threeViewsCheck.buy_price_anchors.buy_zone.low}}</span>
+                    <span class="pr-desc">低位轻仓试探</span>
+                    <span class="pr-action">建议仓位 ≤30%</span>
+                </a>
+                <a href="#" @click.prevent="pickBuyPrice(threeViewsCheck.buy_price_anchors.buy_zone.high)"
+                   class="price-ref-btn support" :class="{active:addForm.buy_price===threeViewsCheck.buy_price_anchors.buy_zone.high,'key-action':true}">
+                    <span class="pr-label">突破跟进★</span>
+                    <span class="pr-price">¥{{threeViewsCheck.buy_price_anchors.buy_zone.high}}</span>
+                    <span class="pr-desc">趋势确认后加仓</span>
+                    <span class="pr-action">可追仓至50%</span>
+                </a>
             </div>
         </div>
 
-        <!-- 未选择股票时的提示 -->
-        <div v-if="!threeViewsCheck&&!threeViewsLoading&&!addForm.ts_code" style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px">
-            请输入股票代码，系统将自动检查"三看"条件
+        <!-- 止损+目标 -->
+        <div class="price-grid-row">
+            <div class="pg-label-col">风控参考<br><small>(止损/目标)</small></div>
+            <div class="pg-btns">
+                <a href="#" class="price-ref-btn resist" style="cursor:default;opacity:.85">
+                    <span class="pr-label">止损线</span>
+                    <span class="pr-price">¥{{threeViewsCheck.buy_price_anchors.stop_loss_line.price}}</span>
+                    <span class="pr-desc">{{threeViewsCheck.buy_price_anchors.stop_loss_line.desc}}</span>
+                    <span class="pr-action">无条件离场</span>
+                </a>
+                <a href="#" class="price-ref-btn resist" style="cursor:default;opacity:.85">
+                    <span class="pr-label">第一目标</span>
+                    <span class="pr-price">¥{{threeViewsCheck.buy_price_anchors.target_profit.price}}</span>
+                    <span class="pr-desc">{{threeViewsCheck.buy_price_anchors.target_profit.desc}}</span>
+                    <span class="pr-action">MA20+10%/近30日高</span>
+                </a>
+                <a href="#" class="price-ref-btn support" style="cursor:default;opacity:.85">
+                    <span class="pr-label">安全支撑</span>
+                    <span class="pr-price">¥{{threeViewsCheck.buy_price_anchors.safety_support.price}}</span>
+                    <span class="pr-desc">{{threeViewsCheck.buy_price_anchors.safety_support.desc}}</span>
+                </a>
+            </div>
         </div>
 
-        <!-- 手动确认区 -->
-        <div v-if="threeViewsCheck" style="margin-top:14px;padding:14px;border-top:1px solid var(--border)">
-            <div style="font-weight:500;margin-bottom:10px;color:var(--text-secondary)">📌 我的确认</div>
-            <div style="display:flex;flex-direction:column;gap:10px">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                    <input type="checkbox" v-model="addForm.confirm_high_low" style="width:16px;height:16px;accent-color:var(--success)">
-                    <span style="font-size:13px">我已确认高低点抬高</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                    <input type="checkbox" v-model="addForm.confirm_ma" style="width:16px;height:16px;accent-color:var(--success)">
-                    <span style="font-size:13px">我已确认均线多头排列</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                    <input type="checkbox" v-model="addForm.confirm_volume" style="width:16px;height:16px;accent-color:var(--success)">
-                    <span style="font-size:13px">我已确认量价配合</span>
-                </label>
-            </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-muted);line-height:1.6;padding:8px 10px;background:var(--bg-card);border-radius:6px">
+            <b style="color:var(--text-secondary)">计算逻辑：</b>
+            回调介入=近30日低点+2% &nbsp;|&nbsp;
+            突破跟进=max(MA20+3%, 现价+2%) &nbsp;|&nbsp;
+            止损线=近30日低点-3%
         </div>
     </div>
 
@@ -1648,14 +1714,20 @@
                     <span class="tech-tag">{{sellCheckData.technical_check.ma_status.passed===false?'🔴':sellCheckData.technical_check.ma_status.passed===true?'✅':'⚪'}}</span>
                     <span class="tech-name">均线排列</span>
                     <span class="tech-val">{{sellCheckData.technical_check.ma_status.label}}</span>
-                    <span class="tech-hint" v-if="sellCheckData.technical_check.ma_status.ma5&&sellCheckData.technical_check.ma_status.ma20">MA5={{sellCheckData.technical_check.ma_status.ma5}}>MA20={{sellCheckData.technical_check.ma_status.ma20}}</span>
+                    <span class="tech-hint" v-if="sellCheckData.technical_check.ma_status.ma5&&sellCheckData.technical_check.ma_status.ma20">MA5={{sellCheckData.technical_check.ma_status.ma5}}{{sellCheckData.technical_check.ma_status.ma5 > sellCheckData.technical_check.ma_status.ma20 ? '>' : '<'}}MA20={{sellCheckData.technical_check.ma_status.ma20}}</span>
                 </div>
-                <!-- 量价配合 -->
-                <div class="tech-item" :class="{passed:sellCheckData.technical_check.volume_price.passed===true,fail:sellCheckData.technical_check.volume_price.passed===false}">
-                    <span class="tech-tag">{{sellCheckData.technical_check.volume_price.passed===false?'🔴':sellCheckData.technical_check.volume_price.passed===true?'✅':'⚪'}}</span>
+                <!-- 量价配合 (交互体验优化版) -->
+                <div class="tech-item" :class="{passed:sellCheckData.technical_check.volume_price.passed===true,fail:sellCheckData.technical_check.volume_price.passed===false}"
+                     :style="{'border-left-color': sellCheckData.technical_check.volume_price.color}"
+                     :title="`${sellCheckData.technical_check.volume_price.explanation}\n建议: ${sellCheckData.technical_check.volume_price.suggested_action}`">
+                    <span class="tech-tag">{{sellCheckData.technical_check.volume_price.icon}}</span>
                     <span class="tech-name">量价配合</span>
-                    <span class="tech-val">{{sellCheckData.technical_check.volume_price.label}}</span>
-                    <span class="tech-hint">量比 {{sellCheckData.technical_check.volume_price.vol_ratio}} | 日涨跌 {{sellCheckData.technical_check.volume_price.pct_chg>=0?'+':''}}{{sellCheckData.technical_check.volume_price.pct_chg}}%</span>
+                    <span class="tech-val" :style="{color: sellCheckData.technical_check.volume_price.color}">{{sellCheckData.technical_check.volume_price.label}}</span>
+                    <span class="tech-hint">
+                        量比 <strong>{{sellCheckData.technical_check.volume_price.vol_ratio}}</strong> | 
+                        日涨跌 <strong :style="{color: sellCheckData.technical_check.volume_price.pct_chg>=0?'#22c55e':'#ef4444'}">{{sellCheckData.technical_check.volume_price.pct_chg>=0?'+':''}}{{sellCheckData.technical_check.volume_price.pct_chg}}%</strong> |
+                        <span class="vp-strength" :data-strength="sellCheckData.technical_check.volume_price.strength">{{sellCheckData.technical_check.volume_price.strength}}</span>
+                    </span>
                 </div>
                 <!-- 连续走势 -->
                 <div class="tech-item" :class="{passed:sellCheckData.technical_check.consecutive.passed===true,fail:sellCheckData.technical_check.consecutive.passed===false}">
@@ -1678,8 +1750,21 @@
             </div>
         </div>
 
+
         <!-- 价格参考位 -->
         <div class="sell-check-section">
+            <!-- [P1-4] 红绿灯快判模式 -->
+            <div v-if="sellCheckData.price_levels && sellCheckData.price_levels.traffic_light" class="traffic-light-bar" :class="'tl-'+sellCheckData.price_levels.traffic_light.color">
+                <span class="tl-icon">{{sellCheckData.price_levels.traffic_light.color==='red'?'🔴':sellCheckData.price_levels.traffic_light.color==='yellow'?'🟡':'🟢'}}</span>
+                <span class="tl-signal">{{sellCheckData.price_levels.traffic_light.signal}}</span>
+                <span class="tl-action">{{sellCheckData.price_levels.traffic_light.action}}</span>
+                <div class="tl-levels" v-if="sellCheckData.price_levels.traffic_light.key_price_levels && sellCheckData.price_levels.traffic_light.key_price_levels.length">
+                    <span v-for="(kl,idx) in sellCheckData.price_levels.traffic_light.key_price_levels" :key="idx" class="tl-price-tag">
+                        {{kl.label}} ¥{{kl.price}} <small>({{kl.role}})</small>
+                    </span>
+                </div>
+            </div>
+
             <div class="sell-check-title"><span class="check-icon">📍</span> 建议价格位 <span class="check-hint">(点击填入卖出价格)</span></div>
             
             <!-- 压力/止盈位 -->
@@ -1687,20 +1772,41 @@
                 <div class="pg-label-col">止盈价位<br><small>(压力区)</small></div>
                 <div class="pg-btns">
                     <a href="#" v-for="r in sellCheckData.price_levels.resistances" :key="r.label"
-                       @click.prevent="pickPrice(r.price)" 
+                       @click.prevent="pickPrice(r.price)"
                        class="price-ref-btn resist"
-                       :class="{active:sellForm.sell_price===r.price}">
-                        <span class="pr-label">{{r.label.split(' ')[0]}}</span>
+                       :class="{active:sellForm.sell_price===r.price,'key-action':r.is_key}">
+                        <span class="pr-label">{{r.label.split(' ')[0]}}<span v-if="r.is_key" class="key-star">★</span>
+                            <!-- [v4.2 P2-8] 时间概率徽章 -->
+                            <span v-if="r.time_prob && r.time_prob.probability !== null" 
+                                  class="time-prob-badge"
+                                  :class="'prob-'+(r.time_prob.confidence || 'medium')"
+                                  :title="r.time_prob.logic">
+                                ~{{r.time_prob.expected_days}}天 | {{r.time_prob.probability}}%
+                            </span>
+                        </span>
                         <span class="pr-price">¥{{r.price}}</span>
                         <span class="pr-desc">{{r.desc}}</span>
+                        <span v-if="r.action" class="pr-action">{{r.action}} {{r.action_ratio?r.action_ratio+'%':''}}</span>
+                        <!-- [v4.2 P2-9] 命中率标记 -->
+                        <span v-if="sellCheckData.price_levels.hit_rate" class="hit-rate-tag">
+                            <template v-for="hr in (sellCheckData.price_levels.hit_rate.resistances||[]).filter(h=>Math.abs(h.price - r.price) / r.price < 0.03)">
+                                突破{{hr.break_rate||0}}%
+                                <span v-if="hr.total_touches>0">({hr.hit_count}/{hr.total_touches})</span>
+                            </template>
+                        </span>
                     </a>
+                </div>
+                <!-- [v4.2 P2-7] ATR波动率档位标签 -->
+                <div v-if="sellCheckData.price_levels.atr_profile && sellCheckData.price_levels.atr_profile.tier_label" class="atr-tier-tag" :class="'tier-'+sellCheckData.price_levels.atr_profile.tier">
+                    {{sellCheckData.price_levels.atr_profile.tier_label}}
+                    <small>(ATR {{((sellCheckData.price_levels.atr_profile.atr_pct||0)*100).toFixed(1)}}%)</small>
                 </div>
             </div>
             
             <!-- 当前价高亮 -->
             <div class="price-current-row">
-                <button @click="pickPrice(sellCheckData.price_levels.current_price)" class="price-current-btn" :class="{active:sellForm.sell_price===sellCheckData.price_levels.current_price}">
-                    现价 ¥{{sellCheckData.price_levels.current_price}} <span class="source-badge" :title="'数据源:'+sellCheckData.data_source">{{sellCheckData.data_source==='sina_realtime'?'新浪实时':sellCheckData.data_source}}</span>
+                <button @click="pickPrice(sellCheckData.price_levels.current_price)" class="price-current-btn" :class="{ 'active': sellForm.sell_price === sellCheckData.price_levels.current_price }">
+                    现价 ¥{{sellCheckData.price_levels.current_price}} <span class="source-badge" :title="'数据源:'+sellCheckData.data_source">{{sellCheckData.data_source==='sina'||sellCheckData.data_source==='sina_realtime'?'新浪实时':sellCheckData.data_source==='eastmoney'?'东财实时':'Tushare历史'}}</span>
                 </button>
             </div>
             
@@ -1711,10 +1817,26 @@
                     <a href="#" v-for="s in sellCheckData.price_levels.supports" :key="s.label"
                        @click.prevent="pickPrice(s.price)"
                        class="price-ref-btn support"
-                       :class="{active:sellForm.sell_price===s.price}">
-                        <span class="pr-label">{{s.label.split(' ')[0]}}</span>
+                       :class="{active:sellForm.sell_price===s.price,'key-action':s.is_key}">
+                        <span class="pr-label">{{s.label.split(' ')[0]}}<span v-if="s.is_key" class="key-star">★</span>
+                            <!-- [v4.2 P2-8] 时间概率徽章 -->
+                            <span v-if="s.time_prob && s.time_prob.probability !== null"
+                                  class="time-prob-badge"
+                                  :class="'prob-'+(s.time_prob.confidence || 'medium')"
+                                  :title="s.time_prob.logic">
+                                ~{{s.time_prob.expected_days}}天 | {{s.time_prob.probability}}%
+                            </span>
+                        </span>
                         <span class="pr-price">¥{{s.price}}</span>
                         <span class="pr-desc">{{s.desc}}</span>
+                        <span v-if="s.action" class="pr-action">{{s.action}} {{s.action_ratio?s.action_ratio+'%':''}}</span>
+                        <!-- [v4.2 P2-9] 命中率标记 -->
+                        <span v-if="sellCheckData.price_levels.hit_rate" class="hit-rate-tag">
+                            <template v-for="hr in (sellCheckData.price_levels.hit_rate.supports||[]).filter(h=>Math.abs(h.price - s.price) / s.price < 0.03)">
+                                反弹{{hr.bounce_rate||0}}%
+                                <span v-if="hr.total_touches>0">({hr.hit_count}/{hr.total_touches})</span>
+                            </template>
+                        </span>
                     </a>
                 </div>
             </div>
@@ -1731,8 +1853,8 @@
 
         <!-- 快捷操作 -->
         <div class="quick-actions-row">
-            <template v-for="qa in sellCheckData.quick_actions" :key="qa.action">
-                <button class="quick-action-btn" @click="quickSell(qa.action)">{{qa.label}}</button>
+            <template v-for="qa in sellCheckData.quick_actions">
+                <button class="quick-action-btn" :key="qa.action" @click="quickSell(qa.action)">{{qa.label}}</button>
             </template>
         </div>
 
@@ -1797,9 +1919,15 @@
 
     <!-- 支撑位/压力位参考（点击自动填入） -->
     <div v-if="priceLevels" style="margin-bottom:14px">
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <span>📊 技术参考位（点击价格可自动填入）</span>
             <span style="font-size:11px;color:var(--text-muted)">{{priceLevels.calc_basis}}</span>
+            <!-- [v4.2 P2-7] ATR档位 -->
+            <span v-if="priceLevels.atr_profile && priceLevels.atr_profile.tier_label"
+                  class="atr-tier-tag" :class="'tier-'+priceLevels.atr_profile.tier"
+                  style="font-size:10px;padding:1px 6px">
+                {{priceLevels.atr_profile.tier_label}} ATR{{((priceLevels.atr_profile.atr_pct||0)*100).toFixed(1)}}%
+            </span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <!-- 支撑位 -->
@@ -1825,15 +1953,17 @@
                 </div>
             </div>
         </div>
-        <!-- 逻辑说明 -->
+        <!-- [v4.2] 逻辑说明（含ATR自适应） -->
         <div style="margin-top:8px;font-size:11px;color:var(--text-muted);line-height:1.6;padding:8px 10px;background:var(--bg-card);border-radius:6px">
             <b style="color:var(--text-secondary)">计算逻辑：</b>
             S1=近30日最低价（底部成交支撑）&nbsp;|&nbsp;
             S2=MA20均线（中期动态支撑）&nbsp;|&nbsp;
-            S3=成本价-5%（止损心理底线）&nbsp;&nbsp;
+            S3=ATR动态止损（波动率自适应）&nbsp;&nbsp;
             R1=近30日最高价（近期阻力顶）&nbsp;|&nbsp;
-            R2=MA20+10%（合理止盈区）&nbsp;|&nbsp;
-            R3=涨停位（极限目标）
+            R2=动态压力位（MA+ATR偏移/现+ATR*0.67较高值）
+            <template v-if="priceLevels.has_time_prob">
+                &nbsp;|&nbsp;<span style="color:#22c55e">+时间概率</span><span v-if="priceLevels.hit_rate">&nbsp;|&nbsp;<span style="color:#3b82f6">+命中率</span></span>
+            </template>
         </div>
     </div>
     <div v-if="priceLevelsLoading" style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">⏳ 正在获取K线数据计算支撑/压力位...</div>
@@ -2167,6 +2297,96 @@
 </div>
 
 <!-- Stock Finance Detail Modal -->
+    <!-- 筛选审计详情弹窗 v3.3.1 -->
+    <div class="modal-overlay" v-if="showAuditModal" @click.self="showAuditModal=false">
+        <div class="modal audit-animate-in" style="max-width:860px;max-height:90vh;overflow-y:auto">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+                <div>
+                    <h2 style="font-size:18px;font-weight:700;margin:0">📋 筛选审计追踪</h2>
+                    <p style="font-size:12px;color:var(--text-muted);margin:4px 0 0">{{auditStock?.name}} ({{auditStock?.ts_code}}) · {{auditData?.strategy?.toUpperCase()}} · {{auditData?.screen_time}}</p>
+                </div>
+                <button class="btn btn-sm" @click="showAuditModal=false" style="border-radius:50%;width:36px;height:36px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0">✕</button>
+            </div>
+
+            <div v-if="auditData" class="audit-content">
+                <!-- 手动添加提示（无审计数据） -->
+                <div v-if="auditData.is_manual" style="padding:20px;text-align:center;background:rgba(168,85,247,0.08);border-radius:12px;border:1px solid rgba(168,85,247,0.2);margin-bottom:16px">
+                    <div style="font-size:32px;margin-bottom:8px">📝</div>
+                    <div style="font-size:14px;color:var(--text-secondary)">该股票是手动添加的</div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px">无筛选审计记录，无法追溯当时的筛选条件与评分明细</div>
+                </div>
+                <!-- 1. 筛选门禁（Gates） -->
+                <section class="audit-section">
+                    <h3 class="audit-section-title">🚧 筛选门禁</h3>
+                    <table class="audit-table audit-gates-table">
+                        <thead><tr><th>条件</th><th style="width:60%">结果</th></tr></thead>
+                        <tbody>
+                            <tr v-for="g in auditData.gates" :key="g.name" :class="g.passed?'gate-pass':'gate-fail'">
+                                <td class="audit-gate-name">{{g.name}}</td>
+                                <td>
+                                    <span class="gate-result-status">{{g.passed?'✅':'❌'}}</span>
+                                    <span class="gate-result-value" v-if="g.actual">{{g.actual}}</span>
+                                    <span v-if="g.detail" class="gate-detail">{{g.detail}}</span>
+                                    <span v-if="!g.actual && !g.detail" class="gate-no-data">—</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <!-- 2. 评分明细 -->
+                <section class="audit-section">
+                    <h3 class="audit-section-title">📊 评分明细（Scoring）</h3>
+                    <template v-for="(info, dim) in auditData.scoring">
+                    <div v-if="dim!=='total'" class="audit-dim" :key="dim">
+                        <div class="audit-dim-header">
+                            <span class="audit-dim-name">{{dim}}</span>
+                            <span class="audit-dim-score" :class="(info.cap && info.score>=info.cap)?'score-capped':''">
+                                {{info.score}}{{info.cap?'/'+info.cap:''}}分
+                            </span>
+                        </div>
+                        <table v-if="info.items && info.items.length" class="audit-table audit-scoring-table">
+                            <thead><tr><th style="width:18%">子项</th><th style="width:25%">原始数据</th><th style="width:12%">得分</th><th>规则说明</th></tr></thead>
+                            <tbody>
+                                <tr v-for="item in info.items" :key="item.label">
+                                    <td>{{item.label}}</td>
+                                    <td class="audit-raw">{{item.raw}}</td>
+                                    <td class="audit-item-score">{{item.score}}</td>
+                                    <td class="audit-rule">{{item.rule}}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div v-else style="padding:12px;color:var(--text-muted);font-size:12px;text-align:center">无评分明细</div>
+                    </div>
+                    </template>
+
+                    <!-- 总分行 -->
+                    <div v-if="auditData.scoring.total" class="audit-total-row">
+                        <span style="color:var(--text-secondary);font-size:13px">维度合计</span>
+                        <span class="total-badge">{{auditData.scoring.total.final}}</span>
+                        <span style="color:var(--text-muted);font-size:12px">分</span>
+                        <span v-if="auditData.scoring.total.capped" style="font-size:11px;margin-left:8px;color:var(--yellow);background:rgba(245,158,11,0.1);padding:2px 8px;border-radius:4px">
+                            原始{{auditData.scoring.total.sum}}分 → 硬上限截断
+                        </span>
+                        <span v-else style="font-size:11px;color:var(--text-muted);margin-left:8px">（各维度加总）</span>
+                    </div>
+                </section>
+
+                <!-- 3. 关键指标快照（动态适配三套策略） -->
+                <section class="audit-section" v-if="auditData.metrics">
+                    <h3 class="audit-section-title">🔑 关键指标快照</h3>
+                    <div class="audit-metrics-grid">
+                        <!-- 动态遍历 metrics 对象，兼容三套策略的不同字段 -->
+                        <div v-for="(val, key) in auditData.metrics" :key="key" class="audit-metric">
+                            <span class="metric-label">{{metricLabel(key)}}</span>
+                            <span class="metric-value" :class="metricColorClass(key, val)">{{metricFormat(key, val)}}</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
 <div class="modal-overlay finance-modal" v-if="showStockFinanceModal" @click.self="showStockFinanceModal=false">
 <div class="modal finance-animate-in" style="max-width:900px;max-height:90vh;overflow-y:auto">
     <!-- 头部 -->
@@ -2381,7 +2601,7 @@
                         <div style="font-size:var(--finance-section);font-weight:600" :class="f.change>=0?'text-red':'text-green'">{{f.change!=null?(f.change>=0?'+':'')+f.change.toFixed(1)+'%':'-'}}</div>
                     </div>
                 </div>
-                <div style="font-size:var(--finance-label);color:var(--text-secondary);line-height:1.6;background:'var(--bg-body)',padding:'10px 12px',borderRadius:'6px'}">{{f.summary||'暂无摘要'}}</div>
+                <div style="font-size:var(--finance-label);color:var(--text-secondary);line-height:1.6;background:var(--bg-secondary);padding:10px 12px;border-radius:6px">{{f.summary||'暂无摘要'}}</div>
             </div>
         </div>
         <div v-else style="text-align:center;padding:40px;color:var(--text-muted)">
@@ -2453,7 +2673,7 @@
         </div>
         <div v-if="summary.initial_capital>0" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between">
             <span style="color:var(--text-secondary)">总收益</span>
-            <span :class="(summary.total_assets-summary.initial_capital)>=0?'text-red':'text-green'">{{(summary.total_assets-summary.initial_capital)>=0?'+':''}}¥{{formatNum(summary.total_assets-summary.initial_capital)}}</span>
+            <span :class="(summary.total_assets - summary.initial_capital)>=0?'text-red':'text-green'">{{(summary.total_assets - summary.initial_capital)>=0?'+':''}}¥{{formatNum(summary.total_assets - summary.initial_capital)}}</span>
         </div>
     </div>
     <div class="form-group">
@@ -2523,21 +2743,31 @@
 </div>
 </div>
 </div>
+</div>
 
-<script src="/static/js/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-<script src="/static/js/app.js?v=25"></script>
+<script src="/static/js/app.js?v=54"></script>
 <script>
 // CDN加载失败检测
 document.addEventListener('DOMContentLoaded', function() {
     setTimeout(function() {
         var app = document.getElementById('app');
+        // DEBUG: Log actual state before checking
+        console.log('[FALLBACK CHECK] vCloak=' + (app?app.hasAttribute('v-cloak'):'null') + 
+            ' display=' + (app?getComputedStyle(app).display:'n/a') +
+            ' vueApp=' + !!window.__vue_app__ +
+            ' htmlLen=' + (app?app.innerHTML.length:0) +
+            ' first100=' + (app?app.innerHTML.substring(0,100):''));
+        
         if (app && app.hasAttribute('v-cloak') && getComputedStyle(app).display === 'none') {
             console.error('[ERROR] Vue.js 加载失败，请检查网络连接或刷新页面');
             app.innerHTML = '<div style="text-align:center;padding:50px;color:#ff6b6b"><h2>⚠️ 页面加载失败</h2><p>Vue.js 库加载失败，请检查网络连接后刷新页面</p><button onclick="location.reload(true)" style="padding:10px 20px;margin-top:20px;cursor:pointer">强制刷新</button></div>';
             app.style.display = 'block';
+        } else {
+            console.log('[FALLBACK] NOT triggered - condition not met');
         }
-    }, 3000);
+    }, 10000);
 });
 </script>
 </body>

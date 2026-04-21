@@ -1,6 +1,242 @@
-const{createApp,ref,computed,watch,onMounted,onUnmounted,nextTick,h}=Vue;
+const{ref,computed,watch,onMounted,onUnmounted,nextTick,h}=Vue;
 const API='';
 const EL={calm:'😌 冷静',confident:'😎 自信',fomo:'😰 怕错过',greedy:'🤑 贪婪',panic:'😱 恐慌',revenge:'😡 报复性',hesitant:'🤔 犹豫',impulsive:'⚡ 冲动'};
+
+// ============================================================
+// 量价状态辅助工具 (v3.4.8 交互体验优化)
+// ============================================================
+const volumePriceHelper = {
+    // 根据信号获取颜色（支持新旧信号系统）
+    getColor(signal) {
+        const map = {
+            // 旧信号系统
+            'volume_down': '#ef4444',    // 红色 - 放量下跌危险
+            'weak_down': '#f59e0b',      // 橙色 - 缩量下跌警告
+            'volume_up': '#10b981',      // 绿色 - 放量上涨健康
+            'low_vol': '#6b7280',        // 灰色 - 缩量横盘中性
+            'normal': '#3b82f6',         // 蓝色 - 正常状态
+            // 新信号系统（v3.4.10+）
+            'danger': '#ef4444',         // 红色 - 危险/卖出
+            'strong': '#22c55e',         // 绿色 - 强势/买入
+            'good': '#3b82f6',           // 蓝色 - 良好/持有
+            'weak': '#94a3b8',           // 灰色 - 弱势/观望
+            'normal': '#6b7280'          // 中灰 - 正常
+        };
+        return map[signal] || '#6b7280';
+    },
+    
+    // 根据信号获取图标（支持新旧信号系统）
+    getIcon(signal) {
+        const map = {
+            // 旧信号系统
+            'volume_down': '📉',
+            'weak_down': '⚠️',
+            'volume_up': '📈',
+            'low_vol': '↔️',
+            'normal': '✅',
+            // 新信号系统（v3.4.10+）
+            'danger': '📉',
+            'strong': '🔥',
+            'good': '📈',
+            'weak': '⚪',
+            'normal': '📊'
+        };
+        return map[signal] || '📊';
+    },
+    
+    // 根据信号和数值生成详细描述（支持新旧信号系统）
+    getDescription(signal, vol_ratio, pct_chg) {
+        const descMap = {
+            // 旧信号系统
+            'volume_down': `放量下跌（量比${vol_ratio}），主力出货信号`,
+            'weak_down': `缩量下跌（量比${vol_ratio}），抛压减轻`,
+            'volume_up': `放量上涨（量比${vol_ratio}），动能增强`,
+            'low_vol': `成交清淡（量比${vol_ratio}），横盘整理`,
+            'normal': `成交量正常（量比${vol_ratio}）`,
+            // 新信号系统（v3.4.10+） - 与后端返回的short_desc对应
+            'danger': `放量下跌（量比${vol_ratio}），警惕出货`,
+            'strong': `成交极度活跃（量比${vol_ratio}），量价齐升`,
+            'good': `成交活跃（量比${vol_ratio}），上涨有量支撑`,
+            'weak': vol_ratio < 0.8 ? `成交清淡（量比${vol_ratio}），缺乏动能` : `成交量正常但上涨量能不足（量比${vol_ratio}）`,
+            'normal': `成交量正常（量比${vol_ratio}），上涨量能充足`
+        };
+        return descMap[signal] || `量比${vol_ratio}`;
+    },
+    
+    // 生成悬停提示文本
+    getTooltip(signal, vol_ratio, pct_chg, up_vol_avg, down_vol_avg) {
+        const base = `量比: ${vol_ratio}（比5日均量高${((vol_ratio-1)*100).toFixed(0)}%）`;
+        let trend = '';
+        if (up_vol_avg && down_vol_avg) {
+            const ratio = (up_vol_avg / down_vol_avg).toFixed(1);
+            trend = `上涨日均量是下跌日的${ratio}倍`;
+        }
+        
+        const adviceMap = {
+            // 旧信号系统
+            'volume_down': '强烈建议减仓或止损',
+            'weak_down': '关注支撑位，可持有观察',
+            'volume_up': '趋势健康，可继续持有',
+            'low_vol': '交投清淡，建议观望',
+            'normal': '正常波动，无需特别操作',
+            // 新信号系统（v3.4.10+）
+            'danger': '放量下跌，警惕出货，建议减仓或止损',
+            'strong': '成交极度活跃，量价齐升，可继续持有或加仓',
+            'good': '成交活跃，上涨有量支撑，可继续持有',
+            'weak': '交投清淡或上涨量能不足，建议观望等待放量信号',
+            'normal': '成交量正常，上涨有量支撑，维持当前仓位'
+        };
+        
+        return [base, trend, adviceMap[signal]].filter(Boolean).join(' | ');
+    }
+};
+
+// ============================================================
+// 交互体验增强工具集 (v3.4.9 量价指标描述优化)
+// ============================================================
+const interactionHelper = {
+    // 颜色分类系统
+    getSignalColor(signal) {
+        const colorMap = {
+            'danger': '#ef4444',      // 红色 - 危险/卖出
+            'strong': '#22c55e',      // 绿色 - 强势/买入
+            'good': '#3b82f6',        // 蓝色 - 良好/持有
+            'weak': '#94a3b8',        // 灰色 - 弱势/观望
+            'normal': '#6b7280'       // 中灰 - 正常
+        };
+        return colorMap[signal] || '#6b7280';
+    },
+    
+    // 图标映射系统
+    getSignalIcon(signal) {
+        const iconMap = {
+            'danger': '📉',
+            'strong': '🔥',
+            'good': '📈',
+            'weak': '⚪',
+            'normal': '📊'
+        };
+        return iconMap[signal] || '📊';
+    },
+    
+    // 自然语言描述生成器
+    generateVolumeDescription(volumeData) {
+        const { signal, vol_ratio, pct_chg, up_vol_avg, down_vol_avg } = volumeData;
+        
+        // 第一层：简短描述
+        const shortDescMap = {
+            'danger': '放量下跌，警惕出货',
+            'strong': '成交极度活跃，量价齐升',
+            'good': '成交活跃，上涨有量支撑',
+            'weak': (vol_ratio < 0.8) ? '成交清淡，缺乏动能' : '成交量正常但上涨量能不足',
+            'normal': '成交量正常，上涨量能充足'
+        };
+        
+        // 第二层：详细解释
+        let explanation = '';
+        if (vol_ratio > 1.5) {
+            explanation = `成交量非常活跃（比平时高${((vol_ratio-1)*100).toFixed(0)}%）`;
+        } else if (vol_ratio > 1.2) {
+            explanation = `成交量活跃（比平时高${((vol_ratio-1)*100).toFixed(0)}%）`;
+        } else if (vol_ratio < 0.8) {
+            explanation = `成交清淡（比平时低${((1-vol_ratio)*100).toFixed(0)}%）`;
+        } else {
+            explanation = '成交量在正常范围内';
+        }
+        
+        // 第三层：资金流向分析
+        let flowAnalysis = '';
+        if (up_vol_avg && down_vol_avg) {
+            const ratio = (up_vol_avg / down_vol_avg).toFixed(1);
+            if (ratio > 1.5) {
+                flowAnalysis = `上涨日成交量是下跌日的${ratio}倍，显示资金积极流入`;
+            } else if (ratio > 1.0) {
+                flowAnalysis = `上涨日成交量略高于下跌日，资金面偏积极`;
+            } else {
+                flowAnalysis = `下跌日成交量较高，显示抛压相对较大`;
+            }
+        }
+        
+        return {
+            short: shortDescMap[signal] || '成交量分析',
+            explanation: explanation,
+            flow: flowAnalysis,
+            full: [shortDescMap[signal], explanation, flowAnalysis].filter(Boolean).join('。') + '。'
+        };
+    },
+    
+    // 操作建议生成器
+    generateAdvice(signal, profitPct = 0) {
+        const adviceMap = {
+            'danger': {
+                title: '建议减仓',
+                detail: '放量下跌是主力出货信号，建议及时减仓控制风险',
+                urgency: 'high',
+                actions: ['减仓50%', '设置严格止损', '避免加仓']
+            },
+            'strong': {
+                title: '可加仓',
+                detail: '量价配合良好，上涨有量支撑，可考虑加仓',
+                urgency: 'medium',
+                actions: ['可加仓20-30%', '设置移动止盈', '持有为主']
+            },
+            'good': {
+                title: '继续持有',
+                detail: '量价关系健康，趋势稳定，继续持有',
+                urgency: 'low',
+                actions: ['继续持有', '关注阻力位', '跌破支撑位考虑减仓']
+            },
+            'weak': {
+                title: '观望',
+                detail: (vol_ratio < 0.8) ? '成交清淡，缺乏动能，建议观望等待放量信号' : '成交量正常但上涨量能不足，建议观望等待放量确认',
+                urgency: 'low',
+                actions: ['观望', '等待放量信号', '不追高']
+            },
+            'normal': {
+                title: '维持仓位',
+                detail: '成交量正常，上涨量能充足，维持当前仓位',
+                urgency: 'none',
+                actions: ['维持仓位', '关注技术面变化', '按计划操作']
+            }
+        };
+        
+        const baseAdvice = adviceMap[signal] || adviceMap.normal;
+        
+        // 结合盈亏状态调整建议
+        if (profitPct > 20 && signal === 'strong') {
+            baseAdvice.detail += ' 当前盈利丰厚，可考虑分批止盈锁定利润';
+            baseAdvice.actions.push('分批止盈');
+        }
+        
+        return baseAdvice;
+    },
+    
+    // 生成可视化CSS类
+    getVisualClass(signal) {
+        const classMap = {
+            'danger': 'vp-danger',
+            'strong': 'vp-strong',
+            'good': 'vp-good',
+            'weak': 'vp-weak',
+            'normal': 'vp-normal'
+        };
+        return classMap[signal] || 'vp-normal';
+    },
+    
+    // 生成迷你进度条HTML（用于量比可视化）
+    generateMiniBar(vol_ratio, max = 2.0) {
+        const percentage = Math.min(100, (vol_ratio / max) * 100);
+        let color = '#10b981'; // 绿色
+        if (vol_ratio > 1.5) color = '#22c55e'; // 深绿
+        else if (vol_ratio < 0.8) color = '#94a3b8'; // 灰色
+        
+        return `
+            <div class="mini-bar-container" style="width: 60px; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden;">
+                <div class="mini-bar-fill" style="width: ${percentage}%; height: 100%; background: ${color}; border-radius: 4px;"></div>
+            </div>
+        `;
+    }
+};
 
 // ============================================================
 // Token 管理
@@ -57,7 +293,7 @@ async function tryRefreshToken(){
     }catch(e){return false}
 }
 
-createApp({
+Vue.createApp({
 setup(){
     const positions=ref([]),summary=ref({total_market_value:0,total_cost:0,total_profit:0,total_profit_pct:0,today_profit:0,position_count:0,is_trade_time:false,last_update:'-',cash:0,initial_capital:0,total_assets:0,alert_count:0});
     const loading=ref(false),searchKeyword=ref(''),sortKey=ref('market_value'),sortDir=ref('desc'),activeTab=ref('positions');
@@ -66,9 +302,18 @@ setup(){
     const screenInfo=ref({running:false,hasResult:false,lastRun:null,runTime:null});
     const watchAdding=ref(false),watchList=ref([]),watchReport=ref(null);
     const currentStrategy=ref('trend_break');
+    // 多策略结果缓存（keyed by strategy name）
+    const allScreenResults=ref({});
+    // 各策略执行摘要（供策略卡片展示）
+    const strategySummaries=ref({});
+    // 正在运行的策略列表
+    const runningStrategies=ref([]);
     // 默认策略列表 - 使用普通对象确保模板始终可以访问
     const DEFAULT_STRATEGIES = {
-        'trend_break': { name: '趋势突破', icon: '📈', suitable: '中期趋势投资者' },
+        'trend_break': {
+            name: '趋势突破', icon: '📈', suitable: '大盘上升/震荡期',
+            description: '买入信号：①趋势面(~37分)MA20位置(5)+方向(4)+HL结构(4)+MACD状态(0~12)+均线多头(0~10)；②板块(15分)相对超额收益+概念热度排名；③资金(10分)主力净流入+大单结构+持续性；④共振(15分)三看共振(全过15/二看9/一看5)；⑤催化(10分)业绩预告/回购/涨停/缩量回踩'
+        },
         'sector_leader': { name: '板块龙头', icon: '🏆', suitable: '短期热点追踪' },
         'oversold_bounce': { name: '超跌反弹', icon: '📉', suitable: '抄底机会捕捉' }
     };
@@ -79,10 +324,11 @@ setup(){
     const screenStrategyReason=ref('');
     const screenStrategyRecommended=ref('');
     const strategyBacktestData=ref({});
-    const showAddModal=ref(false),showSellModal=ref(false),showDetailModal=ref(false),showAlertModal=ref(false),showImportModal=ref(false),showParamsModal=ref(false),showAdviceModal=ref(false),showHeaderMenu=ref(false),showTradeDetailModal=ref(false);
+    const showAddModal=ref(false),showSellModal=ref(false),showDetailModal=ref(false),showAlertModal=ref(false),showImportModal=ref(false),showParamsModal=ref(false),showAdviceModal=ref(false),showHeaderMenu=ref(false),showTradeDetailModal=ref(false),showCapitalModal=ref(false);
     const editingPosition=ref(null),detailPosition=ref(null),sellTarget=ref(null),alertTarget=ref(null),tradeDetailTarget=ref(null),adviceTarget=ref(null),adviceData=ref(null),adviceLoading=ref(false),adviceError=ref('');
-    const threeViewsCheck=ref(null),threeViewsLoading=ref(false);
+    const threeViewsCheck=ref(null),threeViewsLoading=ref(false),threeViewsError=ref('');
     const sellCheckData=ref(null),sellCheckLoading=ref(false),sellConfirmedCheck=ref(false);
+    const buyConfirmedCheck=ref(false);
     const emotionLabels=EL;
     const addForm=ref({ts_code:'',buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''});
     const sellForm=ref({sell_price:'',sell_volume:'',sell_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:''});
@@ -317,9 +563,9 @@ setup(){
     async function searchStock(){clearTimeout(searchTimer);const kw=addForm.value.ts_code.trim();if(kw.length<1){searchResults.value=[];return}searchTimer=setTimeout(async()=>{try{const r=await fetchWithAuth(`${API}/api/search?keyword=${encodeURIComponent(kw)}`);const d=await r.json();searchResults.value=d.results||[]}catch(e){searchResults.value=[]}},300)}
     function selectStock(s){addForm.value.ts_code=s.ts_code;searchResults.value=[]}
 
-    function resetForm(){addForm.value={ts_code:'',buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''};editingPosition.value=null;searchResults.value=[]}
+    function resetForm(){addForm.value={ts_code:'',buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''};editingPosition.value=null;searchResults.value=[];buyConfirmedCheck.value=false;threeViewsCheck.value=null;threeViewsError.value=''}
     function openAddModal(){resetForm();showAddModal.value=true}
-    function openTradeModal(p){editingPosition.value=p;addForm.value={ts_code:p.ts_code,buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''};showAddModal.value=true}
+    function openTradeModal(p){editingPosition.value=p;addForm.value={ts_code:p.ts_code,buy_price:'',buy_volume:'',buy_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:'',emotion:''};buyConfirmedCheck.value=false;showAddModal.value=true}
 
     // 买入弹窗中输入股票代码时自动触发三看确认
     watch(()=>addForm.value.ts_code,(code)=>{if(code&&code.length>=6)loadThreeViews(code)},{delay:500})
@@ -331,20 +577,16 @@ setup(){
         try{const url=editingPosition.value?`${API}/api/positions/${editingPosition.value.id}/trades`:`${API}/api/positions`;const r=await fetchWithAuth(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});const d=await r.json();if(r.ok){showAddModal.value=false;showToast(d.message||'保存成功');resetForm();await fetchData()}else{addError.value=d.error||'保存失败'}}catch(e){addError.value='网络错误'}finally{submitting.value=false}
     }
 
-    // 确认买入：先检查三看确认结果
+    // 确认买入：检查用户确认
     async function submitPositionWithConfirm(){
         addError.value='';
         const f=addForm.value;
         if(!f.ts_code.trim()){addError.value='请输入股票代码';return}
         if(!f.buy_price||f.buy_price<=0){addError.value='请输入有效的买入价格';return}
         if(!f.buy_volume||f.buy_volume<=0){addError.value='请输入有效的买入数量';return}
-        // 检查三看确认结果
-        if(threeViewsCheck.value&&threeViewsCheck.value.checks){
-            const checks=threeViewsCheck.value.checks;
-            const passedCount=[checks.high_low?.passed,checks.ma?.passed,checks.volume?.passed].filter(Boolean).length;
-            if(passedCount<2){
-                if(!confirm(`⚠️ 三看确认仅通过 ${passedCount}/3 项\n\n${checks.high_low?.description||''}\n${checks.ma?.description||''}\n${checks.volume?.description||''}\n\n是否继续买入？`)){return}
-            }
+        // 检查用户确认（与卖出界面保持一致）
+        if(threeViewsCheck.value&&!buyConfirmedCheck.value){
+            addError.value='请先勾选确认框，确认已查看三看检查结果';return
         }
         await submitPosition();
     }
@@ -352,6 +594,7 @@ setup(){
     function openSellModal(p){sellTarget.value=p;sellForm.value={sell_price:p.current_price||'',sell_volume:'',sell_date:new Date().toISOString().slice(0,10),fee:0,note:'',reason:''};sellError.value='';sellConfirmedCheck.value=false;showSellModal.value=true;loadSellCheck(p.id)}
     async function loadSellCheck(pid){sellCheckLoading.value=true;try{const r=await fetchWithAuth(`${API}/api/positions/${pid}/sell-check`);if(r.ok)sellCheckData.value=await r.json();else sellCheckData.value=null}catch(e){console.error('卖出检查加载失败:',e);sellCheckData.value=null}finally{sellCheckLoading.value=false}}
     function pickPrice(price){sellForm.value.sell_price=price}
+    function pickBuyPrice(price){if(price)addForm.value.buy_price=price}
     function quickSell(mode){const t=sellTarget.value;if(!t||!mode)return;if(mode==='full'){sellForm.value.sell_volume=t.total_volume;sellForm.value.sell_price=t.current_price||sellForm.value.sell_price}else if(mode==='half'){sellForm.value.sell_volume=Math.floor(t.total_volume/2)}}
     const sellPreview=computed(()=>{const f=sellForm.value,t=sellTarget.value;if(!t||!f.sell_price||!f.sell_volume)return null;const ca=t.avg_cost,sa=f.sell_price*f.sell_volume,co=ca*f.sell_volume,pr=sa-co-(f.fee||0);return{profit:Math.round(pr*100)/100,profit_pct:co>0?Math.round(pr/co*100*100)/100:0}});
     async function submitSell(){
@@ -382,11 +625,11 @@ setup(){
     function closeTradeDetailModal(){showTradeDetailModal.value=false;tradeDetailTarget.value=null}
     async function loadThreeViews(ts_code){
         if(!ts_code){threeViewsCheck.value=null;return}
-        threeViewsLoading.value=true;
+        threeViewsLoading.value=true;threeViewsError.value='';
         try{
             const r=await fetchWithAuth(`${API}/api/check-three-views?ts_code=${ts_code}`);
-            if(r.ok){threeViewsCheck.value=await r.json()}else{threeViewsCheck.value=null}
-        }catch(e){console.error('三看确认加载失败:',e);threeViewsCheck.value=null}finally{threeViewsLoading.value=false}
+            if(r.ok){threeViewsCheck.value=await r.json()}else{const errData=await r.json().catch(()=>({}));threeViewsCheck.value=null;threeViewsError.value=errData.error||'数据获取失败'}
+        }catch(e){console.error('三看确认加载失败:',e);threeViewsCheck.value=null;threeViewsError.value='网络异常，请检查连接'}finally{threeViewsLoading.value=false}
     }
     function openAdviceModal(p){
         adviceTarget.value=p;adviceData.value=null;adviceLoading.value=true;adviceError.value='';
@@ -411,13 +654,25 @@ setup(){
     function closeActionMenu(){actionMenuOpen.value=null;}
 
     function saveCapital(){fetchWithAuth(`${API}/api/capital`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(capitalForm.value)}).then(r=>r.json()).then(d=>{if(d.message){showToast(d.message);fetchData()}}).catch(()=>showToast('保存失败'))}
+    function openCapitalModal(){fetchCapital();nextTick(()=>{capitalForm.value={...capitalForm.value};showCapitalModal.value=true})}
+    function saveCapitalFromModal(){saveCapital();showCapitalModal.value=false}
 
     function switchToTradeLog(){activeTab.value='tradelog';fetchTradeLog();fetchCapital();nextTick(()=>renderAnalysisCharts())}
     function switchToAnalysis(){activeTab.value='analysis';fetchTradeLog();nextTick(()=>renderAnalysisCharts())}
-    function switchToScreener(){activeTab.value='screener';loadScreenResult();/* 策略效果改为懒加载，点击按钮时才加载 */}
+    function switchToScreener(){activeTab.value='screener';loadScreenResult();loadAllStrategySummaries();}
     function switchToReview(){activeTab.value='review';loadReview(reviewPeriod.value)}
     function switchToStrategy(){activeTab.value='strategy';loadRegime();loadStrategyPerformance()}
-    function selectStrategy(key){currentStrategy.value=key;}
+    function selectStrategy(key){
+        currentStrategy.value=key;
+        // 从缓存恢复该策略的结果（如果有的话）
+        if(allScreenResults.value[key]){
+            const cached=allScreenResults.value[key];
+            if(cached.results)screenResults.value=cached.results;
+            if(cached.stats)screenStats.value=cached.stats;
+            if(cached.info)screenInfo.value=cached.info;
+            if(cached.market)screenMarket.value=cached.market;
+        }
+    };
 
     // === Review Functions ===
     async function loadReview(period){
@@ -656,22 +911,74 @@ setup(){
     }
     async function pollScreenResult(){
         try{
-            const r=await fetchWithAuth(`${API}/api/screen/status?strategy=${currentStrategy.value}`);const d=await r.json();
+            const r=await fetchWithAuth(`${API}/api/screen/status?strategy=${currentStrategy.value}`);
+            if(!r.ok){
+                // 【v3.5.4 修复】API调用失败时清除定时器，避免永久轮询
+                console.error('轮询状态API失败:', r.status, await r.text());
+                clearInterval(screenPollTimer);screenPollTimer=null;
+                showToast('状态查询失败，请刷新页面');
+                return;
+            }
+            const d=await r.json();
             if(!d.running){
                 clearInterval(screenPollTimer);screenPollTimer=null;
                 loadScreenResult();
             }
-        }catch(e){}
+        }catch(e){
+            // 【v3.5.4 修复】网络错误也清除定时器，避免永久轮询
+            console.error('轮询状态网络错误:', e);
+            clearInterval(screenPollTimer);screenPollTimer=null;
+            showToast('网络连接异常，请检查网络');
+        }
     }
     async function loadScreenResult(){
         try{
-            const r=await fetchWithAuth(`${API}/api/screen/result?strategy=${currentStrategy.value}`);const d=await r.json();
+            const r=await fetchWithAuth(`${API}/api/screen/result?strategy=${currentStrategy.value}`);
+            if(!r.ok){
+                console.error('加载结果API失败:', r.status, await r.text());
+                showToast('加载结果失败，请刷新页面');
+                return;
+            }
+            const d=await r.json();
             screenMarket.value=d.market||null;screenStats.value=d.stats||null;screenResults.value=d.results||[];
             screenHistory.value=d.history||[];
             screenInfo.value={running:d.running||false,hasResult:!!d.results&&d.results.length>0,lastRun:d.screen_time||null,runTime:d.run_time||null};
+            // ★ 缓存到多策略结果池
+            allScreenResults.value[currentStrategy.value]={market:d.market||null,stats:d.stats||null,results:d.results||[],info:screenInfo.value,history:d.history||[]};
+            // ★ 更新该策略的摘要
+            if(d.results&&d.results.length>0){
+                const topScore=d.results.reduce((max,r)=>Math.max(max,r.total_score||r.total||0),0);
+                strategySummaries.value[currentStrategy.value]={
+                    count:d.results.length,
+                    time:d.screen_time||'',
+                    duration:d.run_time||0,
+                    topScore:topScore,
+                    marketStatus:d.market?(d.market.trend||d.market.regime||''):'',
+                    hasResult:true
+                };
+                // 从运行列表中移除
+                runningStrategies.value=runningStrategies.value.filter(s=>s!==currentStrategy.value);
+            }
             if(d.error)showToast('选股出错: '+d.error);
+        }catch(e){
+            console.error('加载结果网络错误:', e);
+            showToast('网络异常，无法加载结果');
+        }
+    }
+    // ★ 加载所有策略的执行摘要（供策略卡片展示）
+    async function loadAllStrategySummaries(){
+        try{
+            const r=await fetchWithAuth(`${API}/api/screen/all-summaries`);const d=await r.json();
+            if(d.summaries)strategySummaries.value=d.summaries;
+            if(d.running)runningStrategies.value=d.running;
         }catch(e){}
     }
+    // ★ 单策略摘要获取器
+    const getStrategySummary=computed(()=>(key)=>strategySummaries.value[key]||null);
+    // ★ 切换到某策略并查看其缓存结果
+    function viewStrategyResult(key){selectStrategy(key);}
+    // ★ 选择并立即运行
+    function selectAndRun(key){selectStrategy(key);startScreen();}
     async function loadStrategies(){
         try{
             const r=await fetchWithAuth(`${API}/api/screen/strategies`);const d=await r.json();
@@ -701,32 +1008,187 @@ setup(){
     const getScreenPreview=computed(()=>{
         const strategy=currentStrategy.value;
         const params=screenParams.value||[];
+        // 辅助函数：安全读取参数值
+        function pv(key, fallback){ return params.find(p=>p.key===key)?.value??fallback }
         const preview=[];
         if(strategy==='trend_break'){
-            preview.push({text:'MA20 > MA60（趋势向上）',highlight:true});
-            preview.push({text:'MACD金叉或维持多头',highlight:true});
-            preview.push({text:'量比 > 1.3（放量确认）',highlight:params.find(p=>p.key==='volume_ratio')?.value>1.3});
-            preview.push({text:'流通市值 > 50亿',highlight:params.find(p=>p.key==='min_market_cap')?.value>=50});
-            preview.push({text:'近20日跌幅 < 15%（非超跌）',highlight:true});
+            const mvMin=pv('min_circ_mv',50), mvMax=pv('max_circ_mv',300);
+            const devMin=pv('ma20_deviation_min',0);
+            const volMin=pv('min_vol_ratio',1.2);
+            preview.push({text:`MA20站稳+方向向上+高低点抬高（偏离≥${devMin}%）`,highlight:true});
+            preview.push({text:'MACD(12分) 金叉/零上/柱增强',highlight:true});
+            preview.push({text:'均线形态(10分) MA5>MA10>MA20多头排列',highlight:true});
+            preview.push({text:'量比 ≥ '+volMin+'（放量确认）',highlight:volMin<=1.5});
+            preview.push({text:'共振(15分) 量价+均线+HL三看≥2项通过',highlight:false});
+            preview.push({text:'催化(10分) 业绩预告/回购/涨停基因',highlight:false});
+            preview.push({text:`市值 ${mvMin}-${mvMax}亿 + 板块超额 + 资金净流入`,highlight:true});
         }else if(strategy==='sector_leader'){
-            preview.push({text:'板块涨幅 > 2%（板块效应）',highlight:params.find(p=>p.key==='sector_min_pct')?.value>=2});
-            preview.push({text:'个股涨幅 5%-9.5%（非涨停）',highlight:true});
-            preview.push({text:'换手率 5%-15%（活跃但非过热）',highlight:true});
-            preview.push({text:'主力资金净流入 > 0',highlight:true});
+            const boardPct=pv('min_board_pct',2);
+            const turnMin=pv('min_turnover',8);
+            const mvMin=pv('min_circ_mv',50), mvMax=pv('max_circ_mv',200);
+            preview.push({text:`Step1: 概念板块涨幅 Top5（≥${boardPct}% 热门门槛）`,highlight:true});
+            preview.push({text:`Step2: 每个板块内个股涨幅 Top5`,highlight:true});
+            preview.push({text:`换手率 ≥ ${turnMin}%（资金充分换手）`,highlight:true});
+            preview.push({text:`流通市值 ${mvMin}-${mvMax}亿（适中弹性）`,highlight:true});
+            preview.push({text:'排除ST / 上市不足60日次新股',highlight:false});
+            preview.push({text:'二值判断：板块第1名=龙头，其余=观察',highlight:true});
         }else if(strategy==='oversold_bounce'){
-            preview.push({text:'近20日跌幅 > 15%（深度回调）',highlight:params.find(p=>p.key==='drop_threshold')?.value>=15});
-            preview.push({text:'出现止跌信号（长下影/放量/MACD金叉）',highlight:true});
-            preview.push({text:'流通市值 > 100亿（防闪崩）',highlight:params.find(p=>p.key==='min_market_cap')?.value>=100});
-            preview.push({text:'技术改善信号（MA金叉/阳线/放量）',highlight:true});
+            const dropThr=Math.abs(pv('min_drop_pct',20));
+            const mvMin=pv('min_circ_mv',50);
+            const techMin=pv('tech_confirm_min',1);
+            const volThr=pv('vol_ratio_threshold',1.3);
+            const shadowThr=pv('lower_shadow_pct',1.5);
+            preview.push({text:`近20日跌幅 > ${dropThr}%（深度回调）`,highlight:dropThr>=15});
+            preview.push({text:`流通市值 ${mvMin}-${pv('max_circ_mv',300)}亿（防闪崩）`,highlight:mvMin>=30});
+            preview.push({text:'止跌信号：长下影线(>'+shadowThr+'%) / 放量('+volThr+'倍以上) / MACD金叉',highlight:true});
+            preview.push({text:`技术改善信号(MA金叉/阳线/放量)：需${techMin>0?'至少'+techMin+'个':'不强制'}`,highlight:techMin>=1});
+            preview.push({text:'HL结构：低点抬高=反弹就绪 / 初步企稳=观望',highlight:true});
+            preview.push({text:'加分：业绩预增扭亏/大额回购(+2)',highlight:false});
         }
         return preview;
     });
-    function quickBuyFromScreen(r){resetForm();addForm.value.ts_code=r.ts_code;addForm.value.buy_price=r.price;showAddModal.value=true}
+    function quickBuyFromScreen(r){resetForm();addForm.value.ts_code=r.ts_code;const _p=Number(r.price)||0;addForm.value.buy_price=_p>0?_p:'';addForm.value.buy_volume=100;showAddModal.value=true;if(r.ts_code&&r.ts_code.length>=6) loadThreeViews(r.ts_code)}
+
+    // 【v3.3.1】筛选审计追踪（v3.6支持自选股查看）
+    const showAuditModal=ref(false)
+    const auditStock=ref(null)
+    const auditData=ref(null)
+    function showAuditDetail(r){
+        // 统一处理选股结果和自选股两种数据结构
+        auditStock.value={ts_code:r.ts_code,name:r.name||r.ts_code}
+        auditData.value=r.match_audit||null  // 后端返回的完整审计数据
+        if(!auditData.value) {
+            // 区分：手动添加 vs 旧版筛选结果
+            auditData.value={
+                error:'该股票是手动添加的，无筛选审计记录',
+                gates:[],scoring:{},metrics:{},
+                is_manual:true  // 标记为手动添加，用于UI区分显示
+            }
+        } else {
+            auditData.value.is_manual=false
+        }
+        showAuditModal.value=true
+    }
+    function hlLabel(s){
+        const m={
+            'rebound_ready':'反弹就绪','stabilizing':'初步企稳',
+            'weak_uptrend':'弱势反弹','strong_uptrend':'强势反弹',
+            'downtrend_continues':'继续创新低','uncertain':'不确定',
+            'insufficient_data':'数据不足','error':'计算异常'
+        }
+        return m[s]||s||'—'
+    }
+
+    // 审计弹窗指标网格辅助函数（适配三套策略不同metrics字段，v3.6完善）
+    function metricLabel(key){
+        const m={
+            // 基础指标
+            pct_20d:'近20日跌幅', deviation:'MA20偏离度', price_change_pct:'日涨幅', pct_chg:'涨跌幅',
+            circ_mv_yi:'流通市值', total_net_in:'主力净流入', inflow_days:'连续流入天数',
+            inflow_ratio:'流入强度比', excess_return:'相对超额',
+            vol_ratio:'量比', turnover_rate:'换手率',
+            // 超跌反弹特有
+            hl_structure:'HL结构', macd_signal:'MACD信号',
+            three_views_count:'三看通过数',
+            stop_signals:'止跌信号', tech_improve_signals:'技术改善信号',
+            matched_concepts:'匹配概念',
+        }
+        return m[key]||key
+    }
+
+    // HL结构标签中文映射
+    function hlStructureLabel(val){
+        const m={
+            'rebound_ready':'反弹就绪',
+            'stabilizing':'初步企稳',
+            'weak_uptrend':'弱势反弹',
+            'strong_uptrend':'强势反弹',
+            'downtrend_continues':'继续创新低',
+            'uncertain':'不确定',
+            'insufficient_data':'数据不足',
+            'error':'计算异常'
+        }
+        return m[val]||val||'—'
+    }
+
+    // MACD信号标签中文映射
+    function macdSignalLabel(val){
+        const m={
+            'bullish_trend':'多头信号',
+            'bearish_trend':'空头信号',
+            'neutral':'中性',
+            'golden_cross':'金叉',
+            'dead_cross':'死叉',
+        }
+        return m[val]||val||'—'
+    }
+
+    function metricFormat(key, val){
+        if(val===null || val===undefined) return '—'
+        if(key==='circ_mv_yi'){
+            const n=parseFloat(val)
+            if(n>=10000) return (n/10000).toFixed(1)+'万亿'
+            return n.toFixed(0)+'亿'
+        }
+        // 主力净流入：智能格式化万/亿
+        if(key==='total_net_in' && typeof val==='number'){
+            const absVal=Math.abs(val)
+            let formatted
+            if(absVal>=10000){
+                formatted=(val/10000).toFixed(2)+'亿'
+            } else {
+                formatted=val.toFixed(0)+'万'
+            }
+            return (val>=0?'+':'')+formatted
+        }
+        // HL结构和MACD信号：中文标签
+        if(key==='hl_structure') return hlStructureLabel(val)
+        if(key==='macd_signal') return macdSignalLabel(val)
+        // 百分比类
+        if(['pct_20d','deviation','price_change_pct','pct_chg','excess_return','inflow_ratio','vol_ratio','turnover_rate'].includes(key)){
+            const num=typeof val==='number'?val:parseFloat(val)
+            if(isNaN(num)) return String(val)
+            return num.toFixed(2)+'%'
+        }
+        if(key.match(/(pct|ratio)/)) return val+'%'
+        // 数组
+        if(Array.isArray(val)) return val.slice(0,4).join(', ')||'无'
+        // 数字
+        if(typeof val==='number') return val
+        return String(val)
+    }
+
+    function metricColorClass(key, val){
+        // 涨跌类：正红负绿（A股惯例：红涨绿跌）
+        if(['pct_20d','price_change_pct','pct_chg','excess_return','deviation'].includes(key)){
+            const num=typeof val==='number'?val:parseFloat(val)
+            if(isNaN(num)) return ''
+            return num>0?'text-red':(num<0?'text-green':'')
+        }
+        // 净流入：正红（流入）负绿（流出）
+        if(key==='total_net_in'){ return (val>=0)?'text-red':'text-green' }
+        // HL结构：根据类型着色
+        if(key==='hl_structure'){
+            if(['rebound_ready','strong_uptrend','stabilizing'].includes(val)) return 'text-green'
+            if(['downtrend_continues'].includes(val)) return 'text-red'
+            return 'text-blue'
+        }
+        // MACD信号：多头红 空头绿
+        if(key==='macd_signal'){
+            if(['bullish_trend','golden_cross'].includes(val)) return 'text-red'
+            if(['bearish_trend','dead_cross'].includes(val)) return 'text-green'
+            return 'text-blue'
+        }
+        // 特殊颜色
+        if(key==='matched_concepts') return 'text-purple'
+        if(['stop_signals','tech_improve_signals','three_views_count'].includes(key)) return 'text-blue'
+        return ''
+    }
 
     // 观察池
     async function addToWatch(r){
         try{
-            const res=await fetchWithAuth(`${API}/api/watch-list`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:r.ts_code,name:r.name,price:r.price,strategy:currentStrategy.value,total_score:r.total_score})});
+            const res=await fetchWithAuth(`${API}/api/watch-list`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:r.ts_code,name:r.name,price:r.price,strategy:currentStrategy.value,total_score:r.total_score,match_audit:r.match_audit||null})}); // v3.6: 同步审计轨迹
             const d=await res.json();
             showToast(d.message||'操作完成');
         }catch(e){showToast('添加失败')}
@@ -736,8 +1198,8 @@ setup(){
         if(watchAdding.value)return; // 防止重复点击
         watchAdding.value=true;
         try{
-            // 只加入Top 10到观察池
-            const stocks=screenResults.value.slice(0,10).map(r=>({ts_code:r.ts_code,name:r.name,price:r.price,strategy:currentStrategy.value,total_score:r.total_score}));
+            // 只加入Top 10到观察池，v3.6同步match_audit审计轨迹
+            const stocks=screenResults.value.slice(0,10).map(r=>({ts_code:r.ts_code,name:r.name,price:r.price,strategy:currentStrategy.value,total_score:r.total_score,match_audit:r.match_audit||null}));
             const res=await fetchWithAuth(`${API}/api/watch-list/batch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stocks})});
             const d=await res.json();
             // 显示更详细的提示：本次添加数量 / 观察池总数量
@@ -759,7 +1221,9 @@ setup(){
     // === Watch List Tab Functions ===
     const watchItems=ref([]),watchLoading=ref(false),watchListCount=ref(0);
     const watchSearch=ref(''),watchFilter=ref('all');
+    const filterNames={all:'全部',profit:'盈利',loss:'亏损',high_score:'高分',trend_break:'趋势',sector_leader:'龙头',oversold_bounce:'超跌'};
     const watchReportData=ref(null);
+    const watchLastUpdate=ref('');
 
     function translateStrategy(code){
         const map={'trend_break':'趋势突破','sector_leader':'板块龙头','oversold_bounce':'超跌反弹'};
@@ -771,9 +1235,32 @@ setup(){
     const watchTagModal=ref(false),watchTagTarget=ref(null),watchTagForm=ref({tag:''});
     const watchNoteModal=ref(false),watchNoteTarget=ref(null),watchNoteForm=ref({note:''});
     const watchStats=computed(()=>{
-        const items=watchItems.value;let profit=0,loss=0,total=0;
-        items.forEach(w=>{const c=w.track_chg_pct;if(c==null||c===undefined)return;total+=c;if(c>0)profit++;else if(c<0)loss++});
-        return{profit,loss,avg_chg:items.length>0?Math.round(total/items.length*100)/100:0};
+        const items=filteredWatchItems.value;
+        let profit=0,loss=0,total=0,noData=0,flat=0;
+        const validItems=[];
+        items.forEach(w=>{
+            const c=w.track_chg_pct;
+            if(c==null||c===undefined||c===''){noData++;return;}
+            validItems.push(c);
+            total+=c;
+            if(c>0)profit++;
+            else if(c<0)loss++;
+            else flat++;
+        });
+        const validCount=validItems.length;
+        const denom=(profit+loss+flat)||1; // 含平盘的总数，避免除零
+        // ★ 修复：胜率基于有效数据的盈利占比（含平盘时分母更准确）
+        const winRate=validCount>0?Math.round(profit/denom*100):0;
+        // ★ 修复：平均收益只对有数据项计算
+        const avgChg=validCount>0?Math.round(total/validCount*100)/100:0;
+        return{
+            profit,loss,noData,flat,
+            win_rate:winRate,
+            avg_chg:avgChg,
+            count:validCount,
+            totalCount:watchItems.value.length,
+            // 前端可用来显示当前筛选状态
+                        filterLabel:watchFilter.value!=='all'?`(${filterNames[watchFilter.value]||watchFilter.value})`:''};
     });
     const watchGroups=computed(()=>{const s=new Set();watchItems.value.forEach(w=>{if(w.tag)s.add(w.tag)});return[...s].sort()});
     const filteredWatchItems=computed(()=>{
@@ -790,11 +1277,20 @@ setup(){
     });
 
     function switchToWatch(){activeTab.value='watch';loadWatchList()}
+    async function refreshWatchData(){
+        if(watchLoading.value)return;
+        await loadWatchList();
+        showToast('行情已刷新');
+    }
     async function loadWatchList(){
         watchLoading.value=true;
         try{
-            const r=await fetchWithAuth(`${API}/api/watch-list`);const d=await r.json();
+            var _api=API+'/api/watch-list';
+            const r=await fetchWithAuth(_api);const d=await r.json();
             watchItems.value=d.items||[];watchListCount.value=d.count||0;
+            const now=new Date();
+            var _h=String(now.getHours()).padStart(2,'0'),_m=String(now.getMinutes()).padStart(2,'0');
+            watchLastUpdate.value=_h+':'+_m;
         }catch(e){watchItems.value=[]}finally{watchLoading.value=false}
     }
     async function removeWatchItem(w){
@@ -838,7 +1334,16 @@ setup(){
         }catch(e){showToast('添加失败')}
     }
     function quickBuyFromWatch(w){
-        resetForm();addForm.value.ts_code=w.ts_code;addForm.value.buy_price=w.current_price||w.add_price;showAddModal.value=true;
+        resetForm();
+        addForm.value.ts_code=w.ts_code;
+        // ★ 修复：自动填充价格（优先当前价>加入价>0），避免显示0.000
+        const _price=Number(w.current_price)||Number(w.add_price)||0;
+        addForm.value.buy_price=_price>0?_price:'';
+        // ★ 修复：默认填入100股，用户可修改
+        addForm.value.buy_volume=100;
+        showAddModal.value=true;
+        // ★ 立即触发三看检查（不依赖500ms延迟watcher）
+        if(w.ts_code && w.ts_code.length>=6) loadThreeViews(w.ts_code);
     }
     function openWatchTagModal(w){watchTagTarget.value=w;watchTagForm.value={tag:w.tag||''};watchTagModal.value=true}
     async function submitWatchTag(){
@@ -1095,8 +1600,9 @@ setup(){
         window._stockIncomeChart=chart;
         
         const dates=incomeData.map(d=>d.end_date).reverse();
-        const revenues=incomeData.map(d=>d.total_revenue/100000000).reverse(); // 转为亿
-        const profits=incomeData.map(d=>d.net_profit/100000000).reverse();
+        // 后端 income API 返回 revenue(元), n_income(元) — 转为亿
+        const revenues=incomeData.map(d=>(d.revenue||0)/100000000).reverse();
+        const profits=incomeData.map(d=>(d.n_income||d.total_profit||0)/100000000).reverse();
         
         chart.setOption({
             tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
@@ -1470,28 +1976,33 @@ setup(){
         fontSize,setFontSize,
         positions,summary,loading,searchKeyword,sortKey,sortDir,activeTab,indexData,indexSource,indexTime,tradeLogs,tradeLogStats,capitalForm,strategyData,
         screenMarket,screenStats,screenResults,screenHistory,screenInfo,screenBonusTags,getScreenPreview,
+        allScreenResults,strategySummaries,runningStrategies,getStrategySummary,
         currentStrategy,strategyList,strategyListSafe,currentStrategyMeta,screenStrategyReason,screenStrategyRecommended,strategyBacktestData,
+        viewStrategyResult,selectAndRun,loadAllStrategySummaries,
         showAddModal,showSellModal,showDetailModal,showAlertModal,showImportModal,showParamsModal,showAdviceModal,showHeaderMenu,showTradeDetailModal,editingPosition,detailPosition,sellTarget,alertTarget,adviceTarget,tradeDetailTarget,
-        emotionLabels,addForm,sellForm,alertForm,addError,sellError,submitting,submittingSell,searchResults,importData,importMode,importError,
+        emotionLabels,volumePriceHelper,addForm,sellForm,alertForm,addError,sellError,submitting,submittingSell,searchResults,importData,importMode,importError,
         toastMsg,sellPreview,filteredPositions,priceLevels,priceLevelsLoading,priceLevelsError,adviceData,adviceLoading,adviceError,actionMenuOpen,
-        threeViewsCheck,threeViewsLoading,loadThreeViews,
+        threeViewsCheck,threeViewsLoading,threeViewsError,loadThreeViews,
         sellCheckData,sellCheckLoading,sellConfirmedCheck,loadSellCheck,pickPrice,quickSell,
+        buyConfirmedCheck,
         reviewPeriod,reviewLoading,reviewData,regimeLoading,regimeData,showStrategyDetail,backtestDays,backtestHold,backtestLoading,backtestData,alertCheckLoading,alertCheckResult,alertAutoMode,alertAutoTimer,toggleAlertAuto,
         klineData,klineLoading,
         screenParams,paramsLoading,paramsDefault,forceMode,spLoading,spData,spError,spLoadedAt,loadStrategyPerformance,
         refreshData,searchStock,selectStock,submitPosition,openAddModal,openTradeModal,
         openSellModal,submitSell,submitPositionWithConfirm,openAlertModal,submitAlerts,clearAlerts,setStopLoss,setTakeProfit,openDetailModal,closeDetailModal,openTradeDetailModal,closeTradeDetailModal,openAdviceModal,quickAddFromAdvice,quickSellFromAdvice,confirmDelete,deleteTrade,toggleActionMenu,closeActionMenu,
-        saveCapital,switchToTradeLog,switchToAnalysis,switchToScreener,switchToReview,switchToStrategy,selectStrategy,
+        saveCapital,openCapitalModal,saveCapitalFromModal,showCapitalModal,switchToTradeLog,switchToAnalysis,switchToScreener,switchToReview,switchToStrategy,selectStrategy,
         loadReview,loadRegime,runBacktest,checkAlerts,loadKline,
         startScreen,startScreenForce,pollScreenResult,loadScreenResult,quickBuyFromScreen,
+        // 【v3.3.1 修复】筛选审计弹窗 - 必须return才能在模板中使用
+        showAuditModal,auditStock,auditData,showAuditDetail,hlLabel,metricLabel,metricColorClass,metricFormat,
         addToWatch,addAllToWatch,showWatchReport,watchAdding,watchList,watchReport,
         watchItems,watchLoading,watchListCount,watchSearch,watchFilter,watchReportData,
         watchAddModal,watchAddForm,watchAddSearch,watchTagModal,watchTagTarget,watchTagForm,
         watchNoteModal,watchNoteTarget,watchNoteForm,
         showWatchAdviceModal,watchAdviceTarget,watchAdviceData,watchAdviceLoading,watchAdviceError,
         showWatchStrategyModal,watchStrategyTarget,watchStrategyData,watchStrategyLoading,watchStrategyError,
-        watchStats,watchGroups,filteredWatchItems,
-        switchToWatch,loadWatchList,removeWatchItem,clearWatchList,loadWatchReport,
+        watchStats,watchLastUpdate,watchGroups,filteredWatchItems,
+        switchToWatch,refreshWatchData,loadWatchList,removeWatchItem,clearWatchList,loadWatchReport,
         searchWatchStock,selectWatchStock,submitWatchAdd,quickBuyFromWatch,
         openWatchTagModal,submitWatchTag,openWatchNoteModal,submitWatchNote,
         openAdviceModalForWatch,openWatchStrategyModal,openKlineModalForWatch,translateStrategy,

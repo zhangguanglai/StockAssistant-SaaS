@@ -213,6 +213,10 @@ def init_tables():
             print("[MIGRATE] watch_list 表添加 user_id 列...")
             cur.execute("ALTER TABLE watch_list ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
             _rebuild_watch_list_table(cur)
+        # [v3.6] 观察池新增match_audit列，用于存储选股审计轨迹，支持自选股查看筛选审计
+        if not _column_exists(cur, "watch_list", "match_audit"):
+            print("[MIGRATE] watch_list 表添加 match_audit 列...")
+            cur.execute("ALTER TABLE watch_list ADD COLUMN match_audit TEXT DEFAULT ''")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_user ON watch_list(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_tag ON watch_list(tag)")
 
@@ -580,10 +584,22 @@ def get_settings(user_id=1):
 # ============================================================
 
 def get_watch_list_items(user_id=1):
-    """获取观察池列表"""
+    """获取观察池列表（v3.6：match_audit字段反序列化为dict）"""
     with get_cursor() as cur:
         cur.execute("SELECT * FROM watch_list WHERE user_id=? ORDER BY created_at DESC", (user_id,))
-        return [dict(row) for row in cur.fetchall()]
+        items = []
+        for row in cur.fetchall():
+            item = dict(row)
+            # 解析 match_audit JSON 字段
+            if item.get("match_audit"):
+                try:
+                    item["match_audit"] = json.loads(item["match_audit"])
+                except (json.JSONDecodeError, TypeError):
+                    item["match_audit"] = None
+            else:
+                item["match_audit"] = None
+            items.append(item)
+        return items
 
 
 def get_watch_count(user_id=1):
@@ -593,15 +609,16 @@ def get_watch_count(user_id=1):
         return cur.fetchone()["cnt"]
 
 
-def add_watch_item(ts_code, name="", add_price=0, add_strategy="", add_score=0, tag="", note="", user_id=1):
-    """添加到观察池"""
+def add_watch_item(ts_code, name="", add_price=0, add_strategy="", add_score=0, tag="", note="", user_id=1, match_audit=None):
+    """添加到观察池（v3.6新增match_audit参数）"""
     now = datetime.now()
+    audit_json = json.dumps(match_audit, ensure_ascii=False) if match_audit else ""
     with get_cursor() as cur:
         try:
             cur.execute(
-                """INSERT OR IGNORE INTO watch_list (user_id, ts_code, name, add_price, add_date, add_strategy, add_score, tag, note, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (user_id, ts_code, name, add_price, now.strftime("%Y-%m-%d"), add_strategy, add_score, tag, note, now.isoformat())
+                """INSERT OR IGNORE INTO watch_list (user_id, ts_code, name, add_price, add_date, add_strategy, add_score, tag, note, created_at, match_audit)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (user_id, ts_code, name, add_price, now.strftime("%Y-%m-%d"), add_strategy, add_score, tag, note, now.isoformat(), audit_json)
             )
             return cur.rowcount > 0
         except sqlite3.IntegrityError:

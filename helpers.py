@@ -71,7 +71,7 @@ pro = _TushareProxy()
 
 # ============================================================
 # 内存缓存（TTL Cache）
-# 减少对东方财富/Tushare 的重复请求，提升 API 响应速度
+# 减少对新浪/Tushare 的重复请求，提升 API 响应速度
 # ============================================================
 
 _cache_store = {}  # key -> (data, expire_ts)
@@ -135,17 +135,8 @@ def is_trade_time():
 
 
 def should_use_realtime_source():
-    """
-    判断是否应该使用东方财富实时数据源。
-    在交易时段（9:15-15:00）和收盘后当日（15:00-23:59，工作日）都优先使用东方财富。
-    东方财富在收盘后仍返回当天收盘数据，比 Tushare（延迟1-2天）更及时。
-    """
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
-    t = now.time()
-    market_open = dtime.fromisoformat(TRADE_MORNING_START)
-    return t >= market_open  # 9:15 ~ 23:59 工作日都走东方财富
+    """判断是否应该使用实时数据源（新浪财经）。"""
+    return True
 
 
 STOCK_LIST_CACHE_FILE = os.path.join(os.path.dirname(__file__), "data", "stock_list_cache.json")
@@ -441,27 +432,18 @@ def get_realtime_quotes_sina(codes, use_cache=True):
 
 def get_realtime_quotes(codes, use_cache=True):
     """
-    获取实时行情（多数据源降级链）
-    优先级：东方财富 → 新浪财经 → Tushare日线
+    获取实时行情（数据源降级链）
+    优先级：新浪财经 → Tushare日线
     codes: Tushare 格式代码列表
     """
     codes = [c.upper() for c in codes]
     if not codes:
         return {}
 
-    if should_use_realtime_source():
-        # 第一优先：东方财富
-        quotes = get_realtime_quotes_eastmoney(codes, use_cache=use_cache)
-        if quotes:
-            # 标记数据源
-            for v in quotes.values():
-                v.setdefault("_source", "eastmoney")
-            return quotes
-
-        # 第二优先：新浪财经
-        quotes = get_realtime_quotes_sina(codes, use_cache=use_cache)
-        if quotes:
-            return quotes
+    # 第一优先：新浪财经
+    quotes = get_realtime_quotes_sina(codes, use_cache=use_cache)
+    if quotes:
+        return quotes
 
     # 最终降级：Tushare 日线
     result = {}
@@ -474,7 +456,7 @@ def get_realtime_quotes(codes, use_cache=True):
 
 
 def get_realtime_quote(ts_code):
-    """获取单只股票实时行情（东方财富 → 新浪 → Tushare 降级）"""
+    """获取单只股票实时行情（新浪 → Tushare 降级）"""
     ts_code = ts_code.upper()
     quotes = get_realtime_quotes([ts_code])
     return quotes.get(ts_code)
@@ -517,7 +499,7 @@ def enrich_positions(positions):
 
     codes = [p["ts_code"] for p in positions]
 
-    # 多数据源降级链：东方财富 → 新浪财经 → Tushare日线
+    # 多数据源降级链：新浪财经 → Tushare日线
     quotes = get_realtime_quotes(codes)
 
     result = []
@@ -563,14 +545,18 @@ def enrich_positions(positions):
                     ma5_vol = sum(vols[-6:-1]) / 5
                     vol_ratio_val = round(vols[-1] / ma5_vol, 2) if ma5_vol > 0 else 1.0
 
-            # ── 板块涨跌幅（申万行业）──
+            # ── 板块涨跌幅（申万行业）注意字段名是 pct_change 而非 pct_chg ──
             try:
-                df_sw = pro.sw_daily(trade_date=end_dt, fields="ts_code,name,pct_chg")
+                df_sw = pro.sw_daily(trade_date=end_dt, fields="ts_code,name,pct_change")
+                # 当日数据未入库，降级到上一交易日
+                if df_sw.empty:
+                    last_td = _get_last_trade_date()
+                    df_sw = pro.sw_daily(trade_date=last_td, fields="ts_code,name,pct_change")
                 if not df_sw.empty:
                     sw_name = info.get("industry", "")
                     sw_match = df_sw[df_sw["name"].str.contains(sw_name, na=False)]
                     if not sw_match.empty:
-                        sector_chg = float(sw_match.iloc[0]["pct_chg"])
+                        sector_chg = float(sw_match.iloc[0]["pct_change"])
                         sector_name = str(sw_match.iloc[0]["name"])
             except Exception:
                 pass
@@ -618,7 +604,7 @@ def enrich_positions(positions):
             "trades": p.get("trades", []),
             "stop_loss": p.get("stop_loss"),
             "stop_profit": p.get("stop_profit"),
-            "alerts": alerts + _generate_smart_alerts(p, current_price, avg_cost, total_volume, profit_pct),
+            "alerts": alerts,
         })
 
     return result
@@ -792,14 +778,14 @@ def _generate_smart_alerts(position, current_price, avg_cost, total_volume, prof
 # ============================================================
 
 INDEX_CODES = {
-    "000001.SH": {"name": "上证指数", "secid": "1.000001"},
-    "399001.SZ": {"name": "深证成指", "secid": "0.399001"},
-    "399006.SZ": {"name": "创业板指", "secid": "0.399006"},
+    "000001.SH": {"name": "上证指数"},
+    "399001.SZ": {"name": "深证成指"},
+    "399006.SZ": {"name": "创业板指"},
 }
 
 
 def get_index_quotes():
-    """获取大盘指数实时行情（降级链：东方财富 → 新浪财经 → Tushare）"""
+    """获取大盘指数实时行情（数据源：新浪财经 → Tushare）"""
     cache_key = "index_quotes"
     cached = cache_get(cache_key)
     if cached is not None:
@@ -807,45 +793,7 @@ def get_index_quotes():
 
     index_codes = list(INDEX_CODES.keys())
 
-    # 第一优先：东方财富
-    secids = [v["secid"] for v in INDEX_CODES.values()]
-    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-    params = {
-        "fltt": "2",
-        "fields": "f2,f3,f4,f5,f6,f7,f12,f14,f15,f16,f17,f18",
-        "secids": ",".join(secids),
-    }
-    try:
-        resp = _get_requests().get(url, params=params, timeout=8)
-        resp.raise_for_status()
-        data = resp.json()
-        items = data.get("data", {}).get("diff", [])
-        result = {}
-        for item in items:
-            code_raw = str(item.get("f12", ""))
-            ts_code = f"{code_raw}.SH" if code_raw.startswith("000001") else f"{code_raw}.SZ"
-            if ts_code in INDEX_CODES:
-                result[ts_code] = {
-                    "name": item.get("f14"),
-                    "price": item.get("f2"),
-                    "pct_chg": item.get("f3"),
-                    "change": item.get("f4"),
-                    "vol": item.get("f5"),
-                    "amount": item.get("f6"),
-                    "high": item.get("f15"),
-                    "low": item.get("f16"),
-                    "open": item.get("f17"),
-                    "pre_close": item.get("f18"),
-                    "_source": "eastmoney",
-                }
-        if result:
-            ttl = 15 if is_trade_time() else 300
-            cache_set(cache_key, result, ttl)
-            return result
-    except Exception as e:
-        print(f"[WARN] 东方财富指数获取失败，尝试新浪: {e}")
-
-    # 第二优先：新浪财经
+    # 第一优先：新浪财经
     try:
         sina_codes = [f"{c.split('.')[1].lower()}{c[:6]}" for c in index_codes]
         sina_url = f"http://hq.sinajs.cn/list={','.join(sina_codes)}"
@@ -1088,7 +1036,7 @@ def get_fina_indicator(ts_code, periods=4):
             if field in df.columns:
                 df[field] = df[field] / 100.0
         
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 3600)  # 1小时缓存
         return result
     except Exception as e:
@@ -1113,7 +1061,7 @@ def get_income_trend(ts_code, periods=8):
         if df.empty:
             return []
         df = df.sort_values("end_date", ascending=False).head(periods)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 3600)
         return result
     except Exception as e:
@@ -1139,7 +1087,7 @@ def get_forecast(ts_code):
         if df.empty:
             return []
         df = df.sort_values("ann_date", ascending=False).head(4)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 1800)  # 30分钟缓存
         return result
     except Exception as e:
@@ -1164,7 +1112,7 @@ def get_repurchase(ts_code):
         if df.empty:
             return []
         df = df.sort_values("ann_date", ascending=False).head(4)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 3600)
         return result
     except Exception as e:
@@ -1176,10 +1124,47 @@ def get_repurchase(ts_code):
 # P1: 涨停数据接口
 # ============================================================
 
+def _df_to_records(df):
+    """
+    DataFrame 转 records 列表，同时处理 NaN/None（替换为 None 以确保 JSON 合法）
+    JSON 标准不含 NaN，pandas 默认 to_dict 会保留 float('nan') 导致序列化失败
+    """
+    import math
+    records = df.to_dict("records")
+    cleaned = []
+    for row in records:
+        cleaned.append({
+            k: (None if (v is not None and isinstance(v, float) and math.isnan(v)) else v)
+            for k, v in row.items()
+        })
+    return cleaned
+
+
+def _get_last_trade_date(fallback_days=5):
+    """
+    获取上一个交易日（今日之前）。
+    涨停/申万板块等统计类数据通常在收盘后约16-17点才完整入库，
+    因此取"今日之前的最近交易日"作为降级目标。
+    """
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=fallback_days + 2)).strftime("%Y%m%d")
+        df = _get_pro().trade_cal(exchange="SSE", start_date=start_date, end_date=yesterday)
+        df = df[df["is_open"] == 1].sort_values("cal_date", ascending=False)
+        if not df.empty:
+            return str(df.iloc[0]["cal_date"])
+    except Exception:
+        pass
+    # 保底：取昨天
+    return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+
+
 def get_limit_list(trade_date=None):
     """
     获取涨停股票列表（limit_list_d）
     返回: [dict, ...] 含涨停股信息
+    当日无数据时自动降级到上一交易日
     """
     if trade_date is None:
         trade_date = datetime.now().strftime("%Y%m%d")
@@ -1192,9 +1177,17 @@ def get_limit_list(trade_date=None):
             trade_date=trade_date,
             fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,fd_amount"
         )
+        # 当日交易时段中 Tushare 数据延迟，自动降级到上一交易日
+        if df.empty:
+            last_td = _get_last_trade_date()
+            if last_td != trade_date:
+                df = _get_pro().limit_list_d(
+                    trade_date=last_td,
+                    fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,fd_amount"
+                )
         if df.empty:
             return []
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 600)
         return result
     except Exception as e:
@@ -1219,8 +1212,15 @@ def get_limit_step(trade_date=None):
             fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,days,first_time"
         )
         if df.empty:
+            last_td = _get_last_trade_date()
+            if last_td != trade_date:
+                df = _get_pro().limit_step(
+                    trade_date=last_td,
+                    fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,days,first_time"
+                )
+        if df.empty:
             return []
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 600)
         return result
     except Exception as e:
@@ -1245,8 +1245,15 @@ def get_limit_cpt_list(trade_date=None):
             fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,concept"
         )
         if df.empty:
+            last_td = _get_last_trade_date()
+            if last_td != trade_date:
+                df = _get_pro().limit_cpt_list(
+                    trade_date=last_td,
+                    fields="ts_code,trade_date,name,close,pct_chg,amount,limit_amount,fund,limit,concept"
+                )
+        if df.empty:
             return []
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 600)
         return result
     except Exception as e:
@@ -1275,7 +1282,7 @@ def get_ths_members(ts_code):
         )
         if df.empty:
             return []
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 7200)  # 2小时缓存
         return result
     except Exception as e:
@@ -1303,7 +1310,7 @@ def get_moneyflow_ind_ths(trade_date=None):
         if df.empty:
             return []
         df = df.sort_values("net_mf_amount", ascending=False)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 600)
         return result
     except Exception as e:
@@ -1331,7 +1338,7 @@ def get_moneyflow_ind_dc(trade_date=None):
         if df.empty:
             return []
         df = df.sort_values("net_mf_amount", ascending=False)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         cache_set(cache_key, result, 600)
         return result
     except Exception as e:
@@ -1345,7 +1352,8 @@ def get_moneyflow_ind_dc(trade_date=None):
 
 def get_hl_structure(ts_code, n=5, lookback=60):
     """
-    获取股票/指数的高低点结构分析
+    获取股票/指数的高低点结构分析（基于Tushare日线数据）
+    统一调用 analyze_hl_points() 进行核心分析。
     
     Args:
         ts_code: 股票代码
@@ -1353,16 +1361,10 @@ def get_hl_structure(ts_code, n=5, lookback=60):
         lookback: 回溯天数
     
     Returns:
-        dict: {
-            "structure": "上升"/"下降"/"震荡",
-            "score": 0-100,
-            "signal": "买入"/"卖出"/"观望",
-            "high_trend": "上升"/"下降"/"走平",
-            "low_trend": "上升"/"下降"/"走平",
-        }
+        dict: {structure, score, signal, high_trend, low_trend}
+        （兼容旧接口，不含具体点位，仅返回趋势判断）
     """
     try:
-        # 获取历史数据
         end_date = datetime.now().strftime('%Y%m%d')
         start_date = (datetime.now() - timedelta(days=lookback + 30)).strftime('%Y%m%d')
         
@@ -1372,70 +1374,629 @@ def get_hl_structure(ts_code, n=5, lookback=60):
         
         df = df.sort_values('trade_date')
         
-        # 识别高低点（简化版：使用前后n天极值）
-        highs = df['high'].values
-        lows = df['low'].values
+        # 调用统一分析函数
+        hl = analyze_hl_points(highs=df['high'].values, lows=df['low'].values, n=n)
         
-        # 找最近n个高点和低点
+        # 兼容旧接口格式映射
+        trend_map = {"up": "上升", "down": "下降", "flat": "走平"}
+        structure_map = {
+            "uptrend": ("上升趋势", 70, "买入"),
+            "downtrend": ("下降趋势", 30, "卖出"),
+            "weak_uptrend": ("偏强震荡", 55, "观望"),
+            "weak_downtrend": ("偏弱震荡", 45, "观望"),
+            "bottoming": ("底部构建", 60, "关注"),
+            "topping": ("顶部构筑", 40, "谨慎"),
+            "sideways": ("震荡整理", 50, "观望"),
+            "unknown": ("未知", 50, "观望"),
+        }
+        
+        struct_info = structure_map.get(hl["structure"], ("未知", 50, "观望"))
+        
+        return {
+            "structure": struct_info[0],
+            "score": struct_info[1],
+            "signal": struct_info[2],
+            "high_trend": trend_map.get(hl["high_trend"], "走平"),
+            "low_trend": trend_map.get(hl["low_trend"], "走平"),
+            # 额外返回完整点位数据供前端使用
+            "_full": hl,
+        }
+    except Exception as e:
+        print(f"[ERROR] 高低点结构分析失败({ts_code}): {e}")
+        return {"structure": "未知", "score": 50, "signal": "观望", "high_trend": "走平", "low_trend": "走平"}
+
+
+def analyze_hl_points(highs=None, lows=None, n=5):
+    """
+    统一的高低点结构分析函数（v3.5 统一重构）
+
+    接收数组形式的高/低点数据，返回完整的高低点结构分析结果。
+    所有高低点相关逻辑统一收敛到此函数。
+
+    Args:
+        highs: 高价数组 (list/np.array)
+        lows:  低价数组 (list/np.array)
+        n:     极值识别窗口大小（前后各n天），默认5
+
+    Returns:
+        dict: {
+            "structure": "uptrend" / "downtrend" / "sideways" / "unknown",
+            "score": int (-15 ~ 10),
+            "signal": str (自然语言描述),
+            "high_trend": "up" / "down" / "flat",
+            "low_trend":  "up" / "down" / "flat",
+            "recent_highs": [(index, price), ...],   # 最近3个高点
+            "recent_lows":  [(index, price), ...],   # 最近3个低点
+            "hh_count": int,  # 高点创新高次数
+            "hl_count": int,  # 低点创新高次数(低点抬高)
+            "lh_count": int,  # 高点创新低次数
+            "ll_count": int,  # 低点创新低次数
+        }
+
+    使用场景：
+      - get_hl_structure() 内部调用（大盘指数）
+      - get_position_advice() 调用（持仓建议）
+      - screener 选股引擎内联调用
+      - check_three_views() 三看检查
+    """
+    result = {
+        "structure": "unknown",
+        "score": 0,
+        "signal": "无法分析",
+        "high_trend": "flat",
+        "low_trend": "flat",
+        "recent_highs": [],
+        "recent_lows": [],
+        "hh_count": 0, "hl_count": 0, "lh_count": 0, "ll_count": 0,
+    }
+    
+    if highs is None or lows is None:
+        return result
+    
+    try:
+        high_arr = list(highs) if not hasattr(highs, '__len__') or isinstance(highs, (list, tuple)) else list(highs)
+        low_arr = list(lows) if not hasattr(lows, '__len__') or isinstance(lows, (list, tuple)) else list(lows)
+        
+        length = len(high_arr)
+        if length < 10 or length != len(low_arr):
+            result["signal"] = f"数据不足({length}条)"
+            return result
+        
+        # ---- 识别局部极值点：窗口极值法 ----
         high_points = []
         low_points = []
         
-        for i in range(n, len(df) - n):
-            # 高点判断
-            is_high = all(highs[i] > highs[i-j] for j in range(1, n+1)) and \
-                     all(highs[i] > highs[i+j] for j in range(1, n+1))
+        for i in range(n, length - n):
+            is_high = all(high_arr[i] > high_arr[i-j] for j in range(1, n+1)) and \
+                      all(high_arr[i] > high_arr[i+j] for j in range(1, n+1))
             if is_high:
-                high_points.append((i, highs[i]))
+                high_points.append((i, float(high_arr[i])))
             
-            # 低点判断
-            is_low = all(lows[i] < lows[i-j] for j in range(1, n+1)) and \
-                    all(lows[i] < lows[i+j] for j in range(1, n+1))
+            is_low = all(low_arr[i] < low_arr[i-j] for j in range(1, n+1)) and \
+                    all(low_arr[i] < low_arr[i+j] for j in range(1, n+1))
             if is_low:
-                low_points.append((i, lows[i]))
+                low_points.append((i, float(low_arr[i])))
         
         # 取最近3个高低点
         recent_highs = high_points[-3:] if len(high_points) >= 3 else high_points
         recent_lows = low_points[-3:] if len(low_points) >= 3 else low_points
         
-        # 判断趋势
-        high_trend = "走平"
-        low_trend = "走平"
+        result["recent_highs"] = [(idx, round(p, 3)) for idx, p in recent_highs]
+        result["recent_lows"] = [(idx, round(p, 3)) for idx, p in recent_lows]
+        
+        # ---- 判断趋势方向 ----
+        high_trend = "flat"
+        low_trend = "flat"
+        trend_threshold = 0.02  # 2% 阈值
         
         if len(recent_highs) >= 2:
-            high_vals = [h[1] for h in recent_highs]
-            if high_vals[-1] > high_vals[0] * 1.02:
-                high_trend = "上升"
-            elif high_vals[-1] < high_vals[0] * 0.98:
-                high_trend = "下降"
+            h_first = recent_highs[0][1]
+            h_last = recent_highs[-1][1]
+            if h_last > h_first * (1 + trend_threshold):
+                high_trend = "up"
+            elif h_last < h_first * (1 - trend_threshold):
+                high_trend = "down"
         
         if len(recent_lows) >= 2:
-            low_vals = [l[1] for l in recent_lows]
-            if low_vals[-1] > low_vals[0] * 1.02:
-                low_trend = "上升"
-            elif low_vals[-1] < low_vals[0] * 0.98:
-                low_trend = "下降"
+            l_first = recent_lows[0][1]
+            l_last = recent_lows[-1][1]
+            if l_last > l_first * (1 + trend_threshold):
+                low_trend = "up"
+            elif l_last < l_first * (1 - trend_threshold):
+                low_trend = "down"
         
-        # 判断结构
-        if high_trend == "上升" and low_trend == "上升":
-            structure = "上升趋势"
-            score = 70
-            signal = "买入"
-        elif high_trend == "下降" and low_trend == "下降":
-            structure = "下降趋势"
-            score = 30
-            signal = "卖出"
+        result["high_trend"] = high_trend
+        result["low_trend"] = low_trend
+        
+        # ---- HH/HL/LH/LL 统计 ----
+        hh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] > recent_highs[i-1][1])
+        hl = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i][1] < recent_highs[i-1][1])
+        lh = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] > recent_lows[i-1][1])  # 低点抬高
+        ll = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i][1] < recent_lows[i-1][1])  # 低点下移
+        
+        result["hh_count"] = hh
+        result["hl_count"] = hl
+        result["lh_count"] = lh
+        result["ll_count"] = ll
+        
+        # ---- 结构判定与评分 ----
+        if high_trend == "up" and low_trend == "up":
+            result["structure"] = "uptrend"
+            result["score"] = 10
+            result["signal"] = "上升趋势：低点持续抬高，高点突破向上"
+        elif high_trend == "down" and low_trend == "down":
+            result["structure"] = "downtrend"
+            result["score"] = -15
+            result["signal"] = "下降趋势：低点不断下移，风险加大"
+        elif high_trend == "up" and low_trend == "flat":
+            result["structure"] = "weak_uptrend"
+            result["score"] = 5
+            result["signal"] = "偏强震荡：高点突破但低点待确认"
+        elif high_trend == "down" and low_trend == "flat":
+            result["structure"] = "weak_downtrend"
+            result["score"] = -8
+            result["signal"] = "偏弱震荡：高点下移需警惕"
+        elif high_trend == "flat" and low_trend == "up":
+            result["structure"] = "bottoming"
+            result["score"] = 6
+            result["signal"] = "底部构建中：低点已抬高，等待高点突破"
+        elif high_trend == "flat" and low_trend == "down":
+            result["structure"] = "topping"
+            result["score"] = -10
+            result["signal"] = "顶部构筑中：低点开始下移，注意风险"
         else:
-            structure = "震荡整理"
-            score = 50
-            signal = "观望"
+            result["structure"] = "sideways"
+            result["score"] = 2
+            result["signal"] = "震荡整理：方向不明，等待突破"
+            
+    except Exception as e:
+        print(f"[WARN] analyze_hl_points 分析异常: {e}")
+        result["signal"] = f"分析异常: {e}"
+    
+    return result
+
+
+# ============================================================
+# P2-7: 全面波动率自适应 — ATR 公共计算引擎 (v4.2)
+# ============================================================
+
+def calc_atr_profile(closes=None, highs=None, lows=None, latest_price=None):
+    """
+    [v4.2 P2-7] 统一的ATR波动率分析引擎
+    
+    计算个股的ATR值和波动率分档，为所有价格锚点参数提供自适应依据。
+    替代原来分散在各处的硬编码百分比参数。
+    
+    Args:
+        closes: 收盘价列表 (至少21条)
+        highs:  最高价列表
+        lows:   最低价列表
+        latest_price: 可选实时价格（用于ATR%归一化）
+    
+    Returns:
+        dict: {
+            "atr": float,              # 20日平均真实波幅(绝对值)
+            "atr_pct": float,          # ATR/现价的百分比
+            "tier": str,               # "low" / "medium" / "high" / "extreme"
+            "tier_label": str,         # 中文标签如"中波动"
+            "stop_loss_pct": float,    # 推荐止损幅度(5%~18%)
+            "pressure_offset": float,  # 压力位偏离(+8%~+20%)
+            "support_tolerance": float,# 支撑位容忍度(±3%~±12%)
+            "target_offset": float,    # 目标位偏离(±8%~±25%)
+            "buy_callback": float,     # 买入回调幅度(2%~6%)
+            "raw_tr_list": [float],    # 原始TR序列(供高级分析用)
+        }
+    """
+    default = {
+        "atr": 0, "atr_pct": 0.03, "tier": "medium", "tier_label": "默认",
+        "stop_loss_pct": 0.08, "pressure_offset": 0.12,
+        "support_tolerance": 0.05, "target_offset": 0.15,
+        "buy_callback": 0.03, "raw_tr_list": [],
+    }
+    
+    if not closes or len(closes) < 21 or not highs or not lows:
+        return default
+    
+    try:
+        # 计算20日TR序列
+        tr_list = []
+        for i in range(max(1, len(closes) - 20), len(closes)):
+            h = float(highs[i]) if i < len(highs) else 0
+            l = float(lows[i]) if i < len(lows) else 0
+            prev_close = float(closes[i - 1]) if i > 0 else closes[i]
+            tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
+            tr_list.append(tr)
+        
+        if not tr_list:
+            return default
+        
+        atr = sum(tr_list) / len(tr_list)
+        price_ref = latest_price or closes[-1]
+        atr_pct = atr / price_ref if price_ref > 0 else 0.03
+        
+        # ── 四档波动率分类 ──
+        if atr_pct <= 0.02:
+            tier = "low"
+            tier_label = "低波动"
+            stop_loss_pct = 0.05
+            pressure_offset = 0.08
+            support_tolerance = 0.03
+            target_offset = 0.08
+            buy_callback = 0.02
+        elif atr_pct <= 0.04:
+            tier = "medium"
+            tier_label = "中波动"
+            stop_loss_pct = 0.08
+            pressure_offset = 0.12
+            support_tolerance = 0.05
+            target_offset = 0.15
+            buy_callback = 0.03
+        elif atr_pct <= 0.06:
+            tier = "high"
+            tier_label = "高波动"
+            stop_loss_pct = 0.13
+            pressure_offset = 0.16
+            support_tolerance = 0.08
+            target_offset = 0.22
+            buy_callback = 0.05
+        else:
+            tier = "extreme"
+            tier_label = "极端波动"
+            stop_loss_pct = 0.18
+            pressure_offset = 0.20
+            support_tolerance = 0.12
+            target_offset = 0.30
+            buy_callback = 0.06
         
         return {
-            "structure": structure,
-            "score": score,
-            "signal": signal,
-            "high_trend": high_trend,
-            "low_trend": low_trend,
+            "atr": round(atr, 3),
+            "atr_pct": round(atr_pct, 4),
+            "tier": tier,
+            "tier_label": tier_label,
+            "stop_loss_pct": stop_loss_pct,
+            "pressure_offset": pressure_offset,
+            "support_tolerance": support_tolerance,
+            "target_offset": target_offset,
+            "buy_callback": buy_callback,
+            "raw_tr_list": [round(t, 3) for t in tr_list],
         }
     except Exception as e:
-        print(f"[ERROR] 高低点结构分析失败({ts_code}): {e}")
-        return {"structure": "未知", "score": 50, "signal": "观望", "high_trend": "走平", "low_trend": "走平"}
+        print(f"[WARN] calc_atr_profile 异常: {e}")
+        return default
+
+
+def calc_price_time_prob(current_price, target_price, atr_profile, direction="up",
+                         closes=None, highs=None, lows=None):
+    """
+    [v4.2 P2-8] 价格位时间预期与达成概率计算引擎
+    
+    基于ATR波动率、距离百分比、历史K线统计，估算：
+    - expected_days: 预计到达目标价的天数（基于日均波幅推算）
+    - probability: 达成概率(0~100)，综合距离/趋势/波动率
+    
+    Args:
+        current_price: 当前价格
+        target_price: 目标价位
+        atr_profile: calc_atr_profile() 返回的字典
+        direction: "up"(向上突破) 或 "down"(向下测试支撑)
+        closes/highs/lows: K线数据(用于高级概率修正)
+    
+    Returns:
+        dict: {"expected_days": int, "probability": float, "confidence": str}
+              confidence: "high" | "medium" | "low"
+    """
+    if not current_price or not target_price or target_price == 0:
+        return {"expected_days": None, "probability": None, "confidence": "none", "distance_pct": None}
+    
+    try:
+        distance_pct = abs(target_price - current_price) / current_price * 100
+        atr_pct = atr_profile.get("atr_pct", 0.03)
+        tier = atr_profile.get("tier", "medium")
+        atr_val = atr_profile.get("atr", 1)
+        
+        # ── 预期天数：基于ATR日均值推算 ──
+        # 基本假设：每天平均移动约0.5*ATR（有方向性的净移动）
+        daily_move = max(atr_val * 0.4, current_price * 0.005)  # 日均净移动
+        price_gap = abs(target_price - current_price)
+        base_days = int(price_gap / daily_move) if daily_move > 0 else 30
+        
+        # 波动率档位调整：高波动股更快到达但更不确定
+        tier_multiplier = {"low": 2.0, "medium": 1.5, "high": 1.0, "extreme": 0.7}.get(tier, 1.5)
+        expected_days = max(1, round(base_days * tier_multiplier))
+        
+        # ── 达成概率计算 ──
+        # 核心逻辑：距离越近概率越高，方向越明确概率越高
+        if distance_pct <= 3:
+            prob = 85  # 很近，大概率触及
+        elif distance_pct <= 6:
+            prob = 70
+        elif distance_pct <= 10:
+            prob = 55
+        elif distance_pct <= 15:
+            prob = 40
+        elif distance_pct <= 25:
+            prob = 25
+        else:
+            prob = 15  # 太远，不确定性大
+        
+        # 方向修正：上升趋势中向上目标加分，下降趋势中向下支撑加分
+        if len(closes) and len(closes) >= 10:
+            recent_trend = (closes[-1] - closes[-10]) / closes[-10] * 100 if closes[-10] > 0 else 0
+            if direction == "up" and recent_trend > 3:
+                prob = min(95, prob + 15)
+            elif direction == "up" and recent_trend < -5:
+                prob = max(5, prob - 20)
+            elif direction == "down" and recent_trend < -3:
+                prob = min(95, prob + 15)
+            elif direction == "down" and recent_trend > 5:
+                prob = max(5, prob - 20)
+        
+        # 波动率修正：极端波动降低确定性
+        if tier == "extreme":
+            prob = int(prob * 0.75)
+        elif tier == "high":
+            prob = int(prob * 0.88)
+        
+        prob = max(5, min(95, prob))
+        
+        # 置信度分级
+        if prob >= 65 and expected_days <= 10:
+            confidence = "high"
+        elif prob >= 35 and expected_days <= 20:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        
+        return {
+            "expected_days": expected_days,
+            "probability": prob,
+            "confidence": confidence,
+            "distance_pct": round(distance_pct, 1),
+            "logic": f"距{distance_pct:.1f}%|ATR{atr_profile['tier_label']}|预计{expected_days}天",
+        }
+    except Exception as e:
+        print(f"[WARN] calc_price_time_prob 异常: {e}")
+        return {"expected_days": None, "probability": None, "confidence": "error",
+                "distance_pct": None, "logic": f"计算异常: {e}"}
+
+
+def calc_price_hit_rate(df, support_prices=None, resistance_prices=None):
+    """
+    [v4.2 P2-9] 历史价位命中率统计引擎
+    
+    回测近120日K线，统计触及各价位后的反弹/突破率。
+    
+    核心逻辑：
+    - 支撑位命中：价格接近(±2%)该价位后，N日内是否出现上涨反弹
+    - 阻力位命中：价格接近(±2%)该价位后，N日内是否被压制或突破
+    
+    Args:
+        df: Tushare日线DataFrame（建议120行以上）
+        support_prices: [float, ...] 支撑价列表（如[S1, S2]）
+        resistance_prices: [float, ...] 阻力价列表（如[R1, R2]）
+    
+    Returns:
+        dict: {
+            "supports": [{"price", "hit_count", "total_touches", "bounce_rate", "avg_bounce_pct"}],
+            "resistances": [{"price", "hit_count", "total_touches", "break_rate", "avg_break_pct"}],
+            "overall_reliability": float (0~100),
+        }
+    """
+    result = {
+        "supports": [],
+        "resistances": [],
+        "overall_reliability": 60,
+        "sample_size": 0,
+        "lookback_days": 0,
+    }
+    
+    try:
+        if df is None or len(df) < 20:
+            return result
+        
+        df = df.sort_values("trade_date").reset_index(drop=True)
+        closes = df["close"].tolist()
+        highs = df["high"].tolist()
+        lows = df["low"].tolist()
+        
+        result["sample_size"] = len(closes)
+        # 只用最近120天数据做回测
+        max_lookback = min(len(closes), 120)
+        result["lookback_days"] = max_lookback
+        
+        window = 5   # 触及判定窗口
+        fwd_window = 10  # 前瞻窗口（看未来几天走势）
+        tolerance = 0.02  # 价位容忍度±2%
+        
+        def _analyze_level(target_price, is_support=True):
+            """分析单个价位的命中率"""
+            touches = []
+            
+            for i in range(window, max_lookback - fwd_window):
+                if is_support:
+                    # 支撑位检测：最低价接近目标价
+                    day_low = lows[i]
+                    if abs(day_low - target_price) / target_price <= tolerance:
+                        # 看后续fwd_window天内是否有反弹
+                        future_high = max(highs[i+1:i+fwd_window+1]) if i + fwd_window < len(highs) else highs[-1]
+                        bounce_pct = (future_high - day_low) / day_low * 100
+                        touches.append({
+                            "date_index": i,
+                            "touch_price": round(day_low, 2),
+                            "bounced": bounce_pct > 1.5,  # 反弹>1.5%算有效
+                            "bounce_pct": round(bounce_pct, 2),
+                        })
+                else:
+                    # 阻力位检测：最高价接近目标价
+                    day_high = highs[i]
+                    if abs(day_high - target_price) / target_price <= tolerance:
+                        # 看后续fwd_window天内是否突破或回落
+                        future_low = min(lows[i+1:i+fwd_window+1]) if i + fwd_window < len(lows) else lows[-1]
+                        drop_pct = (day_high - future_low) / day_high * 100
+                        touches.append({
+                            "date_index": i,
+                            "touch_price": round(day_high, 2),
+                            "broken": drop_pct <= 1.0,  # 回落<1%算突破成功
+                            "drop_pct": round(drop_pct, 2),
+                        })
+            
+            total = len(touches)
+            if total == 0:
+                return {
+                    "price": target_price,
+                    "hit_count": 0,
+                    "total_touches": 0,
+                    "rate": 0,
+                    "avg_move_pct": None,
+                    "note": f"未触及",
+                }
+            
+            if is_support:
+                hit_count = sum(1 for t in touches if t.get("bounced"))
+                avg_bounce = sum(t["bounce_pct"] for t in touches) / total
+                rate = round(hit_count / total * 100, 1)
+                return {
+                    "price": target_price,
+                    "hit_count": hit_count,
+                    "total_touches": total,
+                    "bounce_rate": rate,
+                    "avg_bounce_pct": round(avg_bounce, 2),
+                    "note": f"{hit_count}/{total}次触及后有反弹",
+                }
+            else:
+                broken_count = sum(1 for t in touches if t.get("broken"))
+                avg_drop = sum(t["drop_pct"] for t in touches) / total
+                rate = round(broken_count / total * 100, 1)
+                return {
+                    "price": target_price,
+                    "hit_count": broken_count,
+                    "total_touches": total,
+                    "break_rate": rate,
+                    "avg_drop_pct": round(avg_drop, 2),
+                    "note": f"{broken_count}/{total}次触及后被突破",
+                }
+        
+        # 分析所有传入的价位
+        if support_prices:
+            for sp in support_prices:
+                if sp and sp > 0:
+                    result["supports"].append(_analyze_level(sp, is_support=True))
+        
+        if resistance_prices:
+            for rp in resistance_prices:
+                if rp and rp > 0:
+                    result["resistances"].append(_analyze_level(rp, is_support=False))
+        
+        # 综合可靠性评分
+        all_rates = []
+        for s in result["supports"]:
+            if s.get("total_touches", 0) > 0:
+                all_rates.append(s.get("bounce_rate", 50))
+        for r in result["resistances"]:
+            if r.get("total_touches", 0) > 0:
+                all_rates.append(r.get("break_rate", 50))
+        
+        if all_rates:
+            result["overall_reliability"] = round(sum(all_rates) / len(all_rates), 1)
+        
+    except Exception as e:
+        print(f"[WARN] calc_price_hit_rate 异常: {e}")
+    
+    return result
+
+
+def calc_buy_price_anchors(df, latest_realtime=None):
+    """
+    [P1-6] 买入场景专用价格锚点 — 不依赖avg_cost，纯市场数据驱动
+    
+    适用场景：选股结果页、自选股详情、策略建议
+    特点：
+      - 无成本价基准（用户尚未买入）
+      - 使用K线极值+均线作为参考
+      - 返回4个价位：2个买入区间 + 安全支撑 + 止损底线
+
+    Args:
+        df: Tushare日线DataFrame(至少20行), 含 open/high/low/close/vol 列
+        latest_realtime: 可选实时价格（优先使用）
+
+    Returns:
+        dict: {
+            "buy_zone": {"low": float, "high": str, "desc": "回调介入区 ~ 突破确认区"},
+            "safety_support": {"price": float, "desc": "安全垫支撑"},
+            "stop_loss_line": {"price": float, "desc": "最大亏损容忍"},
+            "target_profit": {"price": float, "desc": "第一目标"},
+            "latest": float,
+            "ma20": float,
+        }
+    """
+    result = {
+        "buy_zone": {}, "safety_support": {},
+        "stop_loss_line": {}, "target_profit": {},
+        "latest": None, "ma20": None, "atr_profile": {},
+    }
+
+    try:
+        df = df.sort_values("trade_date")
+        closes = df["close"].tolist()
+        highs = df["high"].tolist()
+        lows = df["low"].tolist()
+
+        # [v4.2 P2-7] ATR波动率自适应
+        atr = calc_atr_profile(closes=closes, highs=highs, lows=lows,
+                               latest_price=latest_realtime or closes[-1])
+        result["atr_profile"] = {k: v for k, v in atr.items() if k != "raw_tr_list"}
+
+        # 最新价：实时优先，否则用K线收盘价
+        latest = latest_realtime if latest_realtime else closes[-1]
+        result["latest"] = round(latest, 2) if latest else None
+
+        # MA20
+        ma20 = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else closes[-1]
+        result["ma20"] = ma20
+
+        # 近N日极值
+        lookback = min(30, len(lows))
+        low_n = round(min(lows[-lookback:]), 2)
+        high_n = round(max(highs[-lookback:]), 2)
+
+        # [v4.2 P2-7] 买入下沿：近期低点 + ATR回调容忍度（替代硬编码2%）
+        cb = atr.get("buy_callback", 0.03)
+        buy_low = round(low_n * (1 + cb), 2)
+        # 买入上沿：MA20 + ATR压力偏移的一半 或 现价+回调容忍度，取较低者
+        po_half = atr.get("pressure_offset", 0.12) * 0.5
+        buy_from_ma = round(ma20 * (1 + po_half), 2)
+        buy_from_latest = round(latest * (1 + cb), 2) if latest else buy_from_ma
+        buy_high = min(buy_from_ma, buy_from_latest)
+
+        result["buy_zone"] = {
+            "low": buy_low,
+            "high": buy_high,
+            "desc": f"回调至¥{buy_low}可轻仓试探 / 突破¥{buy_high}可跟进",
+        }
+
+        # 安全垫支撑：近30日最低
+        st = atr.get("support_tolerance", 0.05)
+        result["safety_support"] = {
+            "price": low_n,
+            "desc": f"近{lookback}日强支撑 ¥{low_n}，跌破说明判断失误",
+        }
+
+        # 止损底线：安全垫下方 - ATR止损幅度（给假突破留余量）
+        sl_pct = atr.get("stop_loss_pct", 0.08)
+        result["stop_loss_line"] = {
+            "price": round(low_n * (1 - sl_pct), 2),
+            "desc": f"无条件离场线(ATR{atr['tier_label']},止损{sl_pct*100:.0f}%)",
+        }
+
+        # 第一目标：近30日高点 或 MA20+ATR目标偏移
+        to_pct = atr.get("target_offset", 0.15)
+        target = max(high_n, round(ma20 * (1 + to_pct), 2))
+        result["target_profit"] = {
+            "price": round(target, 2),
+            "desc": f"第一止盈目标(ATR{atr['tier_label']},目标+{to_pct*100:.0f}%)",
+        }
+
+    except Exception as e:
+        print(f"[WARN] calc_buy_price_anchors 计算失败: {e}")
+
+    return result

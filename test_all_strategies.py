@@ -19,14 +19,20 @@ def test_trend_break():
 def test_sector_leader():
     """测试板块龙头首板策略"""
     print("\n" + "="*60)
-    print("【策略2】板块龙头首板策略")
+    print("【策略2】板块龙头首板策略 (极简版 v4.0)")
     print("="*60)
     result = run_sector_leader_screener(top_n=10, silent=False)
     print("\n--- 最终入选 ---")
-    for i, r in enumerate(result.get('top_stocks', [])):
-        print(f"{i+1}. {r['ts_code']} {r.get('name','')} - 评分:{r.get('total_score',0)}")
-    if not result.get('top_stocks'):
+    for i, r in enumerate(result.get('results', [])):
+        rec = r.get('recommendation', '—')
+        reason = r.get('reason', '')
+        print(f"{i+1}. {r.get('ts_code','?')} {r.get('name','')} [{rec}] - {reason}")
+    if not result.get('results'):
         print("无入选股票")
+    print(f"\n--- 统计信息 ---")
+    print(f"板块数: {result.get('stats',{}).get('total_boards',0)}")
+    print(f"Top板块: {result.get('stats',{}).get('top_boards_count',0)}")
+    print(f"最终入选: {result.get('stats',{}).get('final_count',0)}")
     return result
 
 def test_oversold_bounce():

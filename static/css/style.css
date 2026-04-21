@@ -13,6 +13,7 @@ html{
     --blue:#60a5fa;--blue-bg:rgba(96,165,250,.15);--yellow:#fbbf24;--yellow-bg:rgba(251,191,36,.15);
     --orange:#fb923c;--orange-bg:rgba(251,146,60,.15);
     --bg-panel:#141824; /* 等同 --bg-secondary，修复模板中 var(--bg-panel) 未定义导致的白色背景 */
+    --bg-body:#141824; /* 等同 --bg-secondary，修复模板中 var(--bg-body) 未定义导致的白色背景 */
     --radius:16px;--radius-sm:12px;
     
     /* 字体大小系统 - 默认(normal) */
@@ -295,6 +296,33 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 .price-ref-btn.support{background:linear-gradient(180deg,rgba(59,130,246,.06),transparent)}.price-ref-btn.support .pr-price{color:var(--blue)}
 .pr-label{font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px}
 .pr-price{font-size:15px;font-weight:700}.pr-desc{font-size:10px;color:var(--text-muted);max-width:70px;text-align:center;line-height:1.2}
+/* v4.1 关键动作标注 + 操作建议 */
+.key-star{color:#f59e0b;font-size:11px;margin-left:1px}
+.price-ref-btn.key-action{border-color:rgba(245,158,11,.35);position:relative}
+.price-ref-btn.key-action::before{content:'';position:absolute;top:-1px;left:-1px;right:-1px;bottom:-1px;border-radius:inherit;background:linear-gradient(135deg,rgba(245,158,11,.08),transparent);pointer-events:none;z-index:-1}
+.price-ref-btn.resist.key-action{background:linear-gradient(180deg,rgba(239,68,68,.08),rgba(245,158,11,.04),transparent)}
+.price-ref-btn.support.key-action{background:linear-gradient(180deg,rgba(59,130,246,.08),rgba(245,158,11,.04),transparent)}
+.pr-action{display:block;font-size:9px;font-weight:600;padding:2px 6px;margin-top:3px;border-radius:8px;white-space:nowrap;letter-spacing:.2px}
+.price-ref-btn.resist .pr-action{color:#dc2626;background:rgba(239,68,68,.1)}
+.price-ref-btn.support .pr-action{color:#2563eb;background:rgba(59,130,246,.1)}
+
+/* ── [v4.2 P2-7] ATR波动率档位标签 ── */
+.atr-tier-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;letter-spacing:.3px;margin-left:auto;align-self:center}
+.atr-tier-tag.tier-low{background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#065f46}
+.atr-tier-tag.tier-medium{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e}
+.atr-tier-tag.tier-high{background:linear-gradient(135deg,#fee2e2,#fecaca);color:#991b1b}
+.atr-tier-tag.tier-extreme{background:linear-gradient(135deg,#ede9fe,#ddd6fe);color:#5b21b6}
+
+/* ── [v4.2 P2-8] 时间预期+达成概率徽章 ── */
+.time-prob-badge{display:inline-flex;align-items:center;gap:1px;padding:1px 5px;border-radius:6px;font-size:9px;font-weight:700;letter-spacing:.2px;margin-left:3px;vertical-align:middle;line-height:1.4;cursor:help}
+.time-prob-badge.prob-high{background:rgba(34,197,94,.15);color:#15803d}
+.time-prob-badge.prob-medium{background:rgba(234,179,8,.15);color:#a16207}
+.time-prob-badge.prob-low{background:rgba(239,68,68,.12);color:#b91c1c}
+.time-prob-badge.prob-none{display:none}
+
+/* ── [v4.2 P2-9] 历史命中率标签 ── */
+.hit-rate-tag{display:block;font-size:9px;color:var(--text-muted);margin-top:2px;padding-top:2px;border-top:1px dashed rgba(128,128,128,.25)}
+.hit-rate-tag > template:first-child{font-style:italic}
 
 /* 当前价按钮 */
 .price-current-row{display:flex;justify-content:center;padding:8px 14px}
@@ -304,6 +332,17 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 .source-badge{font-size:10px;background:rgba(255,255,255,.25);padding:2px 6px;border-radius:8px;font-weight:400}
 
 /* 风险警报 */
+/* v4.1 红绿灯快判模式 (P1-4) */
+.traffic-light-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;line-height:1.5}
+.traffic-light-bar.tl-red{background:linear-gradient(90deg,rgba(239,68,68,.1),rgba(239,68,68,.03));border-left:3px solid #ef4444}
+.traffic-light-bar.tl-yellow{background:linear-gradient(90deg,rgba(245,158,11,.1),rgba(245,158,11,.03));border-left:3px solid #f59e0b}
+.traffic-light-bar.tl-green{background:linear-gradient(90deg,rgba(34,197,94,.1),rgba(34,197,94,.03));border-left:3px solid #22c55e}
+.tl-icon{font-size:16px;flex-shrink:0}.tl-signal{font-weight:700;min-width:80px}
+.tl-action{color:var(--text-secondary);font-size:12px}
+.tl-levels{display:flex;flex-wrap:wrap;gap:4px;width:100%;margin-top:6px}
+.tl-price-tag{font-size:10px;background:var(--bg-card);border:1px solid var(--border);padding:2px 7px;border-radius:8px;color:var(--text-muted)}
+.tl-price-tag small{color:var(--text-muted);opacity:.7}
+
 .risk-alert-item{display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:13px;font-weight:500;border-bottom:1px solid rgba(128,128,128,.1)}
 .risk-alert-item.alert-critical{background:linear-gradient(90deg,rgba(220,38,38,.12),transparent);color:#b91c1c}
 .risk-alert-item.alert-danger{background:linear-gradient(90deg,rgba(239,68,68,.08),transparent);color:#dc2626}
@@ -331,6 +370,30 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 /* 确认勾选 */
 .sell-confirm-check{display:flex;align-items:center;gap:8px;padding:14px 0 4px;font-size:13px;color:var(--text-secondary);cursor:pointer}
 .sell-confirm-check input[type=checkbox]{width:18px;height:18px;accent-color:var(--primary);cursor:pointer}
+
+/* 三看确认 - 紧凑版 v4.0 */
+.threeview-status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.threeview-status-dot.pass{background:var(--success);box-shadow:0 0 6px rgba(34,197,94,0.5)}
+.threeview-status-dot.warn{background:var(--warning);box-shadow:0 0 6px rgba(245,158,11,0.5)}
+.threeview-item{padding:9px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-main);transition:all 0.2s}
+.threeview-item.passed{border-color:rgba(34,197,94,0.25);background:rgba(34,197,94,0.04)}
+.threeview-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
+.threeview-icon.pass{background:linear-gradient(135deg,#22c55e,#16a34a)}
+.threeview-icon:not(.pass){background:linear-gradient(135deg,#f59e0b,#d97706)}
+.threeview-badge{font-size:10px;padding:1px 7px;border-radius:10px;font-weight:600;margin-left:auto;letter-spacing:0.5px}
+.threeview-badge.pass{color:var(--success);background:rgba(34,197,94,0.12)}
+.threeview-badge.fail{color:var(--warning);background:rgba(245,158,11,0.12)}
+
+/* 三看加载动画 */
+.loading-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--primary);animation:dot-bounce 1.4s infinite both}
+@keyframes dot-bounce{0%,80%,100%{transform:scale(0);opacity:.5}40%{transform:scale(1);opacity:1}}
+
+/* 极简龙头策略 - 展开行专用 */
+.sl-rec-badge{display:inline-flex;align-items:center;padding:4px 14px;border-radius:6px;font-size:13px;font-weight:700;letter-spacing:1px;white-space:nowrap;flex-shrink:0}
+.sl-rec-badge.leader{color:#fff;background:linear-gradient(135deg,#dc2626,#b91c1c);box-shadow:0 2px 8px rgba(220,38,38,0.3)}
+.sl-rec-badge.watch{color:var(--text-primary);background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 2px 8px rgba(245,158,11,0.2)}
+.sl-gate-tag{font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-muted);white-space:nowrap}
+.sl-gate-tag.passed{border-color:rgba(34,197,94,0.3);background:rgba(34,197,94,0.08);color:var(--success)}
 
 /* ============================================
    参数设置
@@ -882,6 +945,21 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 .strategy-tags .tag{display:inline-flex;align-items:center;gap:6px;font-size:var(--font-xs);padding:6px 14px;background:var(--bg-secondary);border-radius:20px;color:var(--text-secondary);font-weight:500}
 .strategy-tags .tag-icon{font-size:var(--font-xs)}
 
+/* ====== 策略执行摘要区 ====== */
+.strategy-exec-summary{margin-top:var(--space-md);padding-top:var(--space-md);border-top:1px solid var(--border)}
+.exec-row{display:flex;align-items:center;font-size:var(--font-xs);padding:3px 0}
+.exec-label{color:var(--text-secondary);font-size:var(--font-xs)}
+.exec-value{color:var(--text-primary);font-weight:600;font-size:var(--font-xs);font-variant-numeric:tabular-nums}
+.exec-view-btn,.exec-run-btn{width:100%;margin-top:var(--space-sm);padding:6px 0;background:transparent;border:1px dashed var(--border);border-radius:var(--radius-xs);color:var(--blue);font-size:var(--font-xs);cursor:pointer;transition:all .2s}
+.exec-view-btn:hover,.exec-run-btn:hover{border-color:var(--blue);background:var(--blue-bg)}
+.exec-empty{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
+.exec-running{display:flex;align-items:center;gap:8px;padding:8px 0;color:var(--yellow);font-size:var(--font-xs)}
+.pulse-dot{width:8px;height:8px;background:var(--yellow);border-radius:50%;animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+.progress-bar{flex:1;height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+.progress-fill{width:60%;height:100%;background:var(--yellow);animation:progressIndeterminate 1.5s infinite}
+@keyframes progressIndeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+
 /* ============================================
    参数确认弹窗样式 - 优化版
    ============================================ */
@@ -971,3 +1049,253 @@ details>summary::-webkit-details-marker{display:none}
 .timeline-card-footer{margin-top:var(--space-sm);padding-top:var(--space-sm);border-top:1px solid var(--border);display:flex;gap:var(--space-md);flex-wrap:wrap;font-size:var(--font-sm)}
 .trade-reason{color:var(--text-secondary);background:var(--bg-hover);padding:4px 12px;border-radius:6px;font-weight:500}
 .trade-emotion{color:var(--blue);background:var(--blue-bg);padding:4px 12px;border-radius:6px;font-weight:500}
+/* ============================================
+   量价配合交互体验优化样式 (v3.4.9)
+   ============================================ */
+.tech-item {
+    border-left: 4px solid transparent;
+    transition: border-left-color 0.3s ease;
+}
+.vp-strength {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: var(--font-xs);
+    font-weight: 600;
+    margin-left: 4px;
+}
+.vp-strength[data-strength="strong"] {
+    background-color: var(--green-bg);
+    color: var(--green);
+}
+.vp-strength[data-strength="moderate"] {
+    background-color: var(--blue-bg);
+    color: var(--blue);
+}
+.vp-strength[data-strength="normal"] {
+    background-color: var(--bg-card);
+    color: var(--text-secondary);
+}
+.vp-strength[data-strength="weak"] {
+    background-color: var(--yellow-bg);
+    color: var(--yellow);
+}
+.vp-strength[data-strength="danger"] {
+    background-color: var(--red-bg);
+    color: var(--red);
+}
+.tech-hint strong {
+    font-weight: 700;
+}
+
+/* ============================================
+   筛选审计弹窗样式 (v3.5 审计轨迹)
+   ============================================ */
+
+/* 弹窗入场动画 */
+.audit-animate-in {
+    animation: auditSlideIn .25s ease-out;
+}
+@keyframes auditSlideIn {
+    from { opacity:0; transform:translateY(20px) scale(.97) }
+    to { opacity:1; transform:translateY(0) scale(1) }
+}
+
+/* 审计内容区域 */
+.audit-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+}
+
+/* 区块标题 */
+.audit-section-title {
+    font-size: var(--font-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-md);
+    padding-left: 8px;
+    border-left: 3px solid var(--blue);
+    letter-spacing: .5px;
+}
+
+/* 门禁表格 */
+.audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-sm);
+}
+.audit-table th {
+    text-align: left;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    border-bottom: 1px solid var(--border);
+}
+.audit-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(128,128,128,.08);
+    vertical-align: middle;
+}
+.audit-gate-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+.audit-gate-status {
+    font-size: var(--font-xs);
+    font-weight: 600;
+    white-space: nowrap;
+}
+/* 门禁通过/未通过行 */
+.gate-pass td:nth-child(2) { color: var(--green); }
+.gate-fail td:nth-child(2) { color: var(--red); }
+.gate-pass td:first-child { padding-left: 14px; border-left: 3px solid var(--green); }
+.gate-fail td:first-child { padding-left: 14px; border-left: 3px solid var(--red); }
+
+/* 优化后的门禁结果展示 */
+.gates-result-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gate-result-status { font-weight: 700; white-space: nowrap; }
+.gate-result-value { font-weight: 600; }
+.gate-detail { color: var(--text-muted); font-size: var(--font-xs); }
+.gate-no-data { color: var(--text-muted); }
+
+/* 评分维度卡片 */
+.audit-dim {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+/* 评分明细表格优化 */
+.audit-scoring-table td { padding: 8px 12px; }
+.audit-scoring-table .audit-rule {
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    white-space: normal !important;  /* 允许规则说明自动换行 */
+    max-width: none;
+}
+.audit-scoring-table .audit-raw {
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    font-size: var(--font-xs); 
+    white-space: nowrap;
+}
+.audit-dim-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: rgba(128,128,128,.03);
+    border-bottom: 1px solid rgba(128,128,128,.06);
+}
+.audit-dim-name {
+    font-size: var(--font-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.audit-dim-score {
+    font-size: var(--font-md);
+    font-weight: 800;
+    color: var(--blue);
+    min-width: 60px;
+    text-align: right;
+}
+.score-capped {
+    color: var(--yellow);
+}
+/* 评分明细项 */
+.audit-score-items {
+    padding: 10px 16px;
+    font-size: var(--font-xs);
+    line-height: 1.7;
+    color: var(--text-secondary);
+}
+.audit-score-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+}
+.audit-score-val {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+/* 总分行（v3.6优化：更醒目的最终得分展示） */
+.audit-total-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
+    background: linear-gradient(135deg, rgba(59,130,246,0.12), rgba(168,85,247,0.08));
+    border: 1px solid rgba(59,130,246,.25);
+    border-radius: var(--radius-md);
+    font-size: var(--font-base);
+    font-weight: 700;
+    margin-top: 12px;
+}
+/* 得分徽章 */
+.audit-total-row .total-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    height: 56px;
+    padding: 0 14px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 12px;
+    font-size: 24px;
+    font-weight: 800;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(59,130,246,.35);
+}
+.total-capped {
+    color: var(--yellow);
+    font-weight: 700;
+}
+.total-final {
+    color: var(--green);
+    font-weight: 800;
+    margin-left: auto;
+}
+
+/* 指标网格 */
+.audit-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+}
+.audit-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    transition: transform .15s ease;
+}
+.audit-metric:hover {
+    transform: translateY(-1px);
+    border-color: var(--text-muted);
+}
+.metric-label {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.metric-value {
+    font-size: var(--font-md);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* 颜色辅助类 */
+.text-red { color: var(--red); }
+.text-green { color: var(--green); }
+.text-blue { color: var(--blue); }
+.text-yellow { color: var(--yellow); }
+.text-purple { color: #c084fc; }

@@ -18,7 +18,7 @@ from helpers import (
     get_fina_indicator, get_income_trend, get_forecast, get_repurchase,
     get_limit_list, get_limit_step, get_limit_cpt_list,
     get_moneyflow_ind_ths, get_moneyflow_ind_dc, get_ths_members,
-    get_st_stocks, get_suspended_stocks,
+    get_st_stocks, get_suspended_stocks, _df_to_records, _get_last_trade_date,
 )
 
 data_bp = Blueprint("data", __name__)
@@ -268,7 +268,7 @@ def market_northbound_flow():
         for col in ["ggt_ss", "ggt_sz", "hgt", "sgt", "north_money", "south_money"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        result = df.to_dict("records")
+        result = _df_to_records(df)
 
         latest = result[0] if result else {}
         return jsonify({
@@ -303,7 +303,7 @@ def stock_northbound_top10(ts_code):
             return jsonify({"ts_code": ts_code, "data": []})
 
         df = df.sort_values("trade_date", ascending=False)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         return jsonify({"ts_code": ts_code, "data": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -316,7 +316,7 @@ def stock_northbound_top10(ts_code):
 @data_bp.route("/api/market/top-list")
 @login_required
 def market_top_list():
-    """获取龙虎榜数据"""
+    """获取龙虎榜数据，当日无数据自动降级到上一交易日"""
     try:
         trade_date = request.args.get("trade_date")
         if not trade_date:
@@ -328,9 +328,17 @@ def market_top_list():
                    "l_sell,l_buy,net_amount,net_rate,amount_rate,declare_date"
         )
         if df.empty:
+            last_td = _get_last_trade_date()
+            if last_td != trade_date:
+                df = pro.top_list(
+                    trade_date=last_td,
+                    fields="ts_code,trade_date,name,close,pct_chg,turnover_rate,amount,"
+                           "l_sell,l_buy,net_amount,net_rate,amount_rate,declare_date"
+                )
+        if df.empty:
             return jsonify({"trade_date": trade_date, "count": 0, "data": []})
 
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         return jsonify({"trade_date": trade_date, "count": len(result), "data": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -358,7 +366,7 @@ def market_top_inst():
         if df.empty:
             return jsonify({"trade_date": trade_date, "count": 0, "data": []})
 
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         return jsonify({"trade_date": trade_date, "count": len(result), "data": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -382,14 +390,22 @@ def stock_chips(ts_code):
             fields="ts_code,trade_date,price,percent,change,hl_rate"
         )
         if df.empty:
+            # 降级到上一交易日
+            last_td = _get_last_trade_date()
+            if last_td != trade_date:
+                df = pro.cyq_chips(
+                    ts_code=ts_code, trade_date=last_td,
+                    fields="ts_code,trade_date,price,percent,change,hl_rate"
+                )
+        if df.empty:
             return jsonify({"ts_code": ts_code, "data": []})
 
         df = df.sort_values("price")
-        result = df.to_dict("records")
+        result = _df_to_records(df)
 
         # 计算套牢盘/获利盘
-        total_pct = sum(item.get("percent", 0) for item in result)
-        profit_pct = sum(item.get("percent", 0) for item in result if item.get("change", 0) > 0)
+        total_pct = sum(item.get("percent", 0) or 0 for item in result)
+        profit_pct = sum(item.get("percent", 0) or 0 for item in result if (item.get("change") or 0) > 0)
         loss_pct = total_pct - profit_pct
 
         return jsonify({
@@ -421,7 +437,7 @@ def stock_nineturn(ts_code):
             return jsonify({"ts_code": ts_code, "data": []})
 
         df = df.sort_values("trade_date", ascending=False).head(30)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         return jsonify({"ts_code": ts_code, "data": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -444,7 +460,7 @@ def stock_research(ts_code):
             return jsonify({"ts_code": ts_code, "data": []})
 
         df = df.sort_values("surv_date", ascending=False).head(20)
-        result = df.to_dict("records")
+        result = _df_to_records(df)
         return jsonify({"ts_code": ts_code, "data": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -457,7 +473,7 @@ def stock_research(ts_code):
 @data_bp.route("/api/market/sector-rotation")
 @login_required
 def market_sector_rotation():
-    """获取板块轮动数据（申万行业 + 东财行业）"""
+    """获取板块轮动数据（申万行业 + 东财行业），当日无数据自动降级上一交易日"""
     try:
         trade_date = request.args.get("trade_date")
         if not trade_date:
@@ -465,32 +481,48 @@ def market_sector_rotation():
 
         # 申万行业
         sw_data = []
+        actual_sw_date = trade_date
         try:
             df_sw = pro.sw_daily(
                 trade_date=trade_date,
-                fields="ts_code,trade_date,close,pct_chg,amount,vol"
+                fields="ts_code,trade_date,name,close,pct_change,amount,vol"
             )
+            # 当日数据尚未更新（交易中）=> 降级到上一交易日
+            if df_sw.empty:
+                actual_sw_date = _get_last_trade_date()
+                df_sw = pro.sw_daily(
+                    trade_date=actual_sw_date,
+                    fields="ts_code,trade_date,name,close,pct_change,amount,vol"
+                )
             if not df_sw.empty:
-                df_sw = df_sw.sort_values("pct_chg", ascending=False)
-                sw_data = df_sw.head(50).to_dict("records")
+                df_sw = df_sw.sort_values("pct_change", ascending=False)
+                sw_data = _df_to_records(df_sw.head(50))
         except Exception as e:
             print(f"[WARN] 申万行业数据获取失败: {e}")
 
         # 东财行业
         dc_data = []
+        actual_dc_date = trade_date
         try:
             df_dc = pro.dc_daily(
                 trade_date=trade_date,
-                fields="ts_code,trade_date,close,pct_chg,amount,vol"
+                fields="ts_code,trade_date,name,close,pct_chg,amount,vol"
             )
+            if df_dc.empty:
+                actual_dc_date = _get_last_trade_date()
+                df_dc = pro.dc_daily(
+                    trade_date=actual_dc_date,
+                    fields="ts_code,trade_date,name,close,pct_chg,amount,vol"
+                )
             if not df_dc.empty:
                 df_dc = df_dc.sort_values("pct_chg", ascending=False)
-                dc_data = df_dc.head(50).to_dict("records")
+                dc_data = _df_to_records(df_dc.head(50))
         except Exception as e:
             print(f"[WARN] 东财行业数据获取失败: {e}")
 
         return jsonify({
             "trade_date": trade_date,
+            "actual_date": actual_sw_date,  # 实际数据日期（可能是降级后的）
             "shenwan": sw_data,
             "eastmoney": dc_data,
         })

@@ -11,6 +11,24 @@ from flask import Blueprint, jsonify, request
 from auth import login_required
 from helpers import pro, get_realtime_quotes
 
+def _clean_for_json(obj):
+    """递归清理对象，确保其可JSON序列化（处理numpy类型）"""
+    try:
+        import numpy as np
+        if isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        if isinstance(obj, (np.integer, int)):
+            return int(obj)
+        if isinstance(obj, (np.floating, float)):
+            return float(obj)
+        if isinstance(obj, (np.ndarray, list)):
+            return [_clean_for_json(item) for item in obj]
+        if isinstance(obj, dict):
+            return {key: _clean_for_json(value) for key, value in obj.items()}
+    except ImportError:
+        pass  # numpy not installed
+    return obj
+
 screen_bp = Blueprint("screen", __name__)
 
 # 选股结果缓存
@@ -50,21 +68,40 @@ def run_screen():
         c = _screen_result_cache[strategy]
         with _screen_lock:
             c["running"] = True
+            c["result"] = None  # 清除旧结果
+        
+        import traceback
         try:
             from screener import run_strategy, save_screen_result
+            # 执行策略
             result = run_strategy(strategy=strategy, top_n=top_n, silent=True, force=force, params=params)
-            save_screen_result(result)
+            
+            # 保存结果到数据库
+            try:
+                save_screen_result(result)
+            except Exception as save_err:
+                print(f"[WARN] 保存结果失败（不影响主流程）: {save_err}")
+            
+            # 更新缓存
             with _screen_lock:
                 c["result"] = result
                 c["last_run"] = datetime.now().strftime("%H:%M:%S")
+                print(f"[INFO] {strategy} 策略执行完成，找到 {len(result.get('results', []))} 只股票")
+                
         except Exception as e:
-            print(f"[ERROR] 选股执行失败: {e}")
+            error_msg = str(e)
+            error_trace = traceback.format_exc()
+            print(f"[ERROR] 选股执行失败: {error_msg}")
+            print(f"[ERROR] 异常堆栈: {error_trace}")
+            
+            # 保存错误信息到缓存
             with _screen_lock:
-                c["running"] = False
-                c["result"] = {"error": str(e)}
+                c["result"] = {"error": error_msg, "trace": error_trace[:500]}
         finally:
+            # 确保 running 状态被清除
             with _screen_lock:
                 c["running"] = False
+                print(f"[INFO] {strategy} 策略线程结束，running=False")
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -169,8 +206,66 @@ def screen_result():
 
     if running:
         return jsonify({"running": True, "message": "选股进行中...", "strategy": strategy})
+    
+    # 如果缓存中没有结果，尝试从历史记录中加载最新的
     if not result:
-        return jsonify({"running": False, "results": [], "market": None, "stats": None, "history": [], "strategy": strategy})
+        try:
+            from screener import load_screen_history
+            history_all = load_screen_history(days=30)
+            # 找到该策略的最新历史记录
+            strategy_history = [h for h in history_all if h.get("strategy") == strategy]
+            if strategy_history:
+                latest = strategy_history[0]  # 按时间倒序，第一个是最新的
+                
+                # 从top5字段构建results数组（历史记录中没有完整的results）
+                top5_results = latest.get("top5", [])
+                # 将top5格式转换为完整的results格式
+                results = []
+                for r in top5_results:
+                    # 基本字段转换
+                    result_item = {
+                        "ts_code": r.get("ts_code", ""),
+                        "name": r.get("name", ""),
+                        "price": r.get("price", 0),
+                        "pct_chg": r.get("pct_chg", 0),
+                        "total_score": r.get("total_score", 0),
+                        # 添加一些默认字段，避免前端报错
+                        "max_board_name": "",
+                        "max_board_pct": 0,
+                        "trend_score": 0,
+                        "board_score": 0,
+                        "money_score": 0,
+                        "bonus_score": 0,
+                        "bonus_tags": [],
+                        "match_audit": {},
+                    }
+                    results.append(result_item)
+                
+                # 构建与run_strategy返回格式兼容的结果对象
+                result = {
+                    "results": results,
+                    "stats": latest.get("stats", {}),
+                    "market": {
+                        "status": latest.get("market_status", "unknown"),
+                        "description": latest.get("market_desc", ""),
+                    },
+                    "run_time": latest.get("run_time", 0),
+                    "screen_date": latest.get("date", ""),
+                    "screen_time": latest.get("time", ""),
+                    "strategy": latest.get("strategy", strategy),
+                    "strategy_meta": {},  # 历史记录中没有strategy_meta
+                }
+                # 同时更新缓存，避免下次重复查询
+                with _screen_lock:
+                    cache["result"] = result
+                    cache["last_run"] = latest.get("time", "")
+                print(f"[INFO] 从历史记录加载 {strategy} 结果: {len(results)} 只股票 (从top5恢复)")
+            else:
+                # 没有历史记录
+                return jsonify({"running": False, "results": [], "market": None, "stats": None, "history": [], "strategy": strategy})
+        except Exception as e:
+            print(f"[WARN] 从历史记录加载失败: {e}")
+            return jsonify({"running": False, "results": [], "market": None, "stats": None, "history": [], "strategy": strategy})
 
     if "error" in result:
         return jsonify({"running": False, "error": result["error"], "strategy": strategy})
@@ -203,7 +298,7 @@ def screen_result():
             except Exception as e:
                 print(f"[WARN] 选股结果实时行情更新失败: {e}")
 
-    return jsonify({
+    response_data = {
         "running": False,
         "market": result.get("market"),
         "results": results,
@@ -214,7 +309,10 @@ def screen_result():
         "strategy": result.get("strategy", strategy),
         "strategy_meta": result.get("strategy_meta"),
         "history": history,
-    })
+    }
+    # 清理数据确保JSON序列化
+    response_data = _clean_for_json(response_data)
+    return jsonify(response_data)
 
 
 @screen_bp.route("/api/screen/history")
@@ -228,3 +326,63 @@ def screen_history():
     except Exception as e:
         history = []
     return jsonify({"history": history})
+
+
+@screen_bp.route("/api/screen/all-summaries")
+@login_required
+def all_strategy_summaries():
+    """获取所有策略的最新执行摘要（供策略卡片内嵌展示）"""
+    global _screen_result_cache
+    summaries = {}
+    running_list = []
+
+    for strategy_key in ["trend_break", "sector_leader", "oversold_bounce"]:
+        cache = _screen_result_cache.get(strategy_key, {})
+        result = cache.get("result") if cache else None
+        is_running = cache.get("running", False) if cache else False
+        last_run_time = cache.get("last_run") if cache else None
+
+        if is_running:
+            running_list.append(strategy_key)
+
+        # 有有效结果时提取摘要
+        if result and "error" not in result:
+            stats = result.get("stats") or {}
+            results = result.get("results") or []
+            top_score = max((r.get("total_score", 0) for r in results), default=0) if results else 0
+            market_info = result.get("market") or {}
+
+            summaries[strategy_key] = {
+                "count": len(results),
+                "last_run": result.get("screen_time") or last_run_time or "-",
+                "duration": round(result.get("run_time", 0), 1),
+                "top_score": int(top_score),
+                "market_status": market_info.get("status", ""),
+                "has_result": True,
+            }
+        else:
+            # 尝试从历史记录中找最近一次（缓存可能被清空但DB还有）
+            try:
+                from screener import load_screen_history
+                history = load_screen_history(days=30)
+                strategy_history = [h for h in history if h.get("strategy") == strategy_key]
+                if strategy_history:
+                    latest = strategy_history[0]
+                    summaries[strategy_key] = {
+                        "count": latest.get("final_count", 0),
+                        "last_run": latest.get("screen_time", latest.get("date", "-")),
+                        "duration": round(latest.get("run_time", 0), 1),
+                        "top_score": 0,
+                        "market_status": "",
+                        "has_result": True,
+                        "from_history": True,
+                    }
+                else:
+                    summaries[strategy_key] = None
+            except Exception:
+                summaries[strategy_key] = None
+
+    return jsonify({
+        "summaries": summaries,
+        "running": running_list,
+    })

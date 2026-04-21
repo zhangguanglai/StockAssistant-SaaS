@@ -20,7 +20,7 @@ from database import (
 )
 from helpers import (
     pro, is_trade_time, should_use_realtime_source, enrich_positions, calc_position_meta,
-    get_stock_info, get_tushare_daily, get_realtime_quotes_eastmoney,
+    get_stock_info, get_tushare_daily,
     get_realtime_quote, get_index_quotes, INDEX_CODES,
     load_stock_list, get_adj_factor, adjust_kline_by_adj_factor,
 )
@@ -85,7 +85,7 @@ def _build_position_list(user_id):
 
 @position_bp.route("/api/index")
 def get_index_data():
-    """获取大盘指数行情（东方财富 → 新浪 → Tushare 降级）+ 高低点结构分析"""
+    """获取大盘指数行情（新浪 → Tushare 降级）+ 高低点结构分析"""
     from helpers import cache_get, cache_set, get_hl_structure
     cache_key = "api_index"
     cached = cache_get(cache_key)
@@ -578,7 +578,10 @@ def set_alerts(position_id):
 @position_bp.route("/api/positions/<int:position_id>/levels")
 @login_required
 def get_price_levels(position_id):
-    """计算持仓的支撑位/压力位"""
+    """计算持仓的支撑位/压力位 [v4.3 增强版: time_prob+traffic_light+R4R5+实时价]"""
+    import pandas as pd
+    from helpers import calc_atr_profile, calc_price_time_prob, calc_price_hit_rate, get_realtime_quotes
+
     user_id = get_current_user_id()
     pos = get_position(position_id, user_id)
     if not pos:
@@ -590,22 +593,44 @@ def get_price_levels(position_id):
     total_cost = sum(float(t["buy_price"]) * int(t["buy_volume"]) for t in buys)
     total_vol = sum(int(t["buy_volume"]) for t in buys)
     sells = [t for t in trades if t["trade_type"] == "sell"]
-    sold_vol = sum(int(t["sell_volume"]) for t in sells)
+    sold_vol = sum(int(t.get("sell_volume", 0)) for t in sells)
     hold_vol = total_vol - sold_vol
     avg_cost = total_cost / total_vol if total_vol > 0 else None
 
+    # [v4.3 5.4] 尝试获取实时价作为基准（与sell-check保持一致）
+    latest_rt = None
+    rt_source = None
+    try:
+        _rt_data = get_realtime_quotes([ts_code])
+        if isinstance(_rt_data, list) and len(_rt_data) > 0 and _rt_data[0].get("price"):
+            latest_rt = float(_rt_data[0]["price"])
+            rt_source = _rt_data[0].get("_source", "unknown")
+        elif isinstance(_rt_data, dict):
+            latest_rt = float(_rt_data.get("price", 0)) if _rt_data.get("price") else None
+            rt_source = _rt_data.get("_source", "unknown")
+    except Exception as e:
+        pass  # 实时价获取失败，回退用收盘价
+
     try:
         end_date = datetime.now().strftime("%Y%m%d")
-        df = pro.daily(ts_code=ts_code, end_date=end_date, limit=60)
+        df = pro.daily(ts_code=ts_code, end_date=end_date, limit=120)
         if df.empty:
             return jsonify({"error": "无法获取K线数据"}), 500
         df = df.sort_values("trade_date")
     except Exception as e:
-        return jsonify({"error": f"K线获取失败: {e}"}), 500
+        return jsonify({"error": f"K线获取失败: {e}"}, 500)
 
     closes = df["close"].tolist()
     highs = df["high"].tolist()
     lows = df["low"].tolist()
+
+    # [v4.3 5.4] 统一价格基准：优先实时价，否则用最后收盘价
+    latest_close = closes[-1] if closes else None
+    price_base = latest_rt or latest_close
+    data_source_label = f"{rt_source}实时价" if latest_rt else f"Tushare收盘价({latest_close})"
+
+    # ── ATR波动率分析 ──
+    atr = calc_atr_profile(closes=closes, highs=highs, lows=lows, latest_price=price_base)
 
     recent_30_lows = lows[-30:] if len(lows) >= 30 else lows
     s1 = round(min(recent_30_lows), 2)
@@ -616,60 +641,204 @@ def get_price_levels(position_id):
     s2 = ma20
     s2_desc = f"MA20均线 ¥{s2}，中期趋势线，多头行情下是动态支撑，跌破均线警戒"
 
-    s3 = round(avg_cost * 0.95, 2) if avg_cost else None
-    s3_desc = f"成本价-5% ¥{s3}，持仓成本的安全边际，跌破即亏损扩大建议止损" if s3 else None
+    _atr_stop_pct = atr.get("stop_loss_pct", 0.08)
+    s3 = round(avg_cost * (1 - _atr_stop_pct), 2) if avg_cost else None
+    s3_label = f"成本-{_atr_stop_pct*100:.0f}%({atr['tier_label']})"
+    s3_desc = f"ATR{atr['tier_label']}止损 ¥{s3}，根据个股波动率自适应调整" if s3 else None
 
     recent_30_highs = highs[-30:] if len(highs) >= 30 else highs
     r1 = round(max(recent_30_highs), 2)
     r1_desc = f"近30日最高价 ¥{r1}，近期高点形成阻力，突破则确认上涨动能"
 
-    r2 = round(ma20 * 1.10, 2)
-    r2_desc = f"MA20+10% ¥{r2}，基于中期均线的合理止盈区，偏离均线过大易回调"
+    _po = atr.get("pressure_offset", 0.12)
+    _to = atr.get("target_offset", 0.15)
+    _r2_from_ma = round(ma20 * (1 + _po), 2)
+    _r2_dynamic = round(price_base * (1 + _po * 0.67), 2) if price_base else _r2_from_ma
+    r2 = max(_r2_from_ma, _r2_dynamic) if price_base else _r2_from_ma
+    r2_desc = f"ATR{atr['tier_label']}动态压力位 ¥{r2}(MA+{_po*100:.0f}%)"
 
-    latest_close = closes[-1] if closes else None
-    r3 = round(latest_close * 1.10, 2) if latest_close else None
-    r3_desc = f"现价+10% ¥{r3}，涨停板极限位，短线操作的最激进目标" if r3 else None
+    # R4/R5 成本目标位（场景C增强：完整展示）
+    r4 = round(avg_cost * (1 + _to * 0.67), 2) if avg_cost else None
+    r5 = round(avg_cost * (1 + _to), 2) if avg_cost else None
 
-    cost_ref = {
-        "avg_cost": round(avg_cost, 3) if avg_cost else None,
-        "cost_minus5": round(avg_cost * 0.95, 2) if avg_cost else None,
-        "cost_minus8": round(avg_cost * 0.92, 2) if avg_cost else None,
-        "cost_plus10": round(avg_cost * 1.10, 2) if avg_cost else None,
-        "cost_plus20": round(avg_cost * 1.20, 2) if avg_cost else None,
-    }
+    # ── [v4.3 5.1] 为关键价位添加时间概率 ──
+    def _tp(target_price, direction):
+        return calc_price_time_prob(
+            current_price=price_base, target_price=target_price,
+            atr_profile=atr, direction=direction,
+            closes=closes, highs=highs, lows=lows)
 
     supports = [
-        {"label": "S1 近30日最低", "price": s1, "desc": s1_desc, "type": "strong"},
-        {"label": "S2 MA20均线", "price": s2, "desc": s2_desc, "type": "medium"},
+        {"label": "S1 近30日最低", "price": s1, "desc": s1_desc, "type": "strong",
+         "is_key": True, "time_prob": _tp(s1, "down")},
+        {"label": "S2 MA20均线", "price": s2, "desc": s2_desc, "type": "medium",
+         "is_key": False, "time_prob": _tp(s2, "down")},
     ]
     if s3:
-        supports.append({"label": "S3 成本-5%", "price": s3, "desc": s3_desc, "type": "soft"})
-    # 支撑位按价格升序排列（从低到高，最弱→最强）
+        supports.append({"label": s3_label, "price": s3, "desc": s3_desc, "type": "soft",
+                         "is_key": True, "time_prob": _tp(s3, "down")})
     supports.sort(key=lambda x: (x["price"] or 0))
 
     resistances = [
-        {"label": "R1 近30日最高", "price": r1, "desc": r1_desc, "type": "strong"},
-        {"label": "R2 MA20+10%", "price": r2, "desc": r2_desc, "type": "medium"},
+        {"label": "R1 近30日最高", "price": r1, "desc": r1_desc, "type": "strong",
+         "is_key": True, "time_prob": _tp(r1, "up")},
+        {"label": "R2 动态压力位", "price": r2, "desc": r2_desc, "type": "medium",
+         "is_key": False, "time_prob": _tp(r2, "up")},
     ]
-    if r3:
-        resistances.append({"label": "R3 涨停位", "price": r3, "desc": r3_desc, "type": "soft"})
-    # 压力位按价格降序排列（从高到低，最强→最弱）
+    # [v4.3 5.1] R4/R5 可选展示
+    if r4:
+        resistances.append({"label": f"R4 成本+{int(_to*67)}%", "price": r4,
+                            "type": "soft", "is_key": True,
+                            "desc": f"第一止盈目标(ATR{atr['tier_label']})",
+                            "time_prob": _tp(r4, "up")})
+    if r5:
+        resistances.append({"label": f"R5 成本+{_to*100:.0f}%", "price": r5,
+                            "type": "soft", "is_key": False,
+                            "desc": f"理想收益目标(ATR{atr['tier_label']})",
+                            "time_prob": _tp(r5, "up")})
     resistances.sort(key=lambda x: (x["price"] or 0), reverse=True)
 
-    return jsonify({
+    # [v4.3 5.1] 计算盈亏比例用于红绿灯
+    profit_pct = ((price_base - avg_cost) / avg_cost * 100) if (avg_cost and avg_cost > 0 and price_base) else None
+
+    result = {
         "ts_code": ts_code,
         "supports": supports,
         "resistances": resistances,
-        "cost_ref": cost_ref,
+        "cost_ref": {
+            "avg_cost": round(avg_cost, 3) if avg_cost else None,
+            "cost_minus": round(avg_cost * (1 - _atr_stop_pct), 2) if avg_cost else None,
+            "cost_plus_target": round(avg_cost * (1 + _to * 0.67), 2) if avg_cost else None,
+            "cost_plus_double": round(avg_cost * (1 + _to * 1.5), 2) if avg_cost else None,
+        },
         "ma20": ma20,
         "latest_close": latest_close,
-        "calc_basis": f"基于近{len(df)}个交易日K线数据计算",
-    })
+        # [v4.3 5.4] 实时价基准
+        "realtime_price": latest_rt,
+        "data_source": data_source_label,
+        "calc_basis": f"基于近{len(df)}个交易日K线数据计算(ATR{atr['tier_label']}全面自适应 v4.3)",
+        "version": "v4.3",
+        "atr_profile": {k: v for k, v in atr.items() if k != "raw_tr_list"},
+        # [v4.3 5.1] 版本标识
+        "has_time_prob": True,
+    }
+
+    # [v4.3 5.1] 红绿灯快判信号
+    result["traffic_light"] = _calc_traffic_light(price_base, s1, r1, profit_pct, danger_count=0, ma20=ma20)
+
+    # [v4.3 5.1] P2-9 命中率统计
+    try:
+        _sp_prices = [s["price"] for s in supports if s.get("price")]
+        _rp_prices = [r["price"] for r in resistances if r.get("price")]
+        result["hit_rate"] = calc_price_hit_rate(
+            df=df, support_prices=_sp_prices, resistance_prices=_rp_prices)
+    except Exception as e:
+        result["hit_rate"] = {"error": str(e)}
+
+    return jsonify(result)
 
 
 # ============================================================
 # 卖出智能检查 (v3.4)
 # ============================================================
+
+def _calc_traffic_light(current_price, s1, r1, profit_pct=None, danger_count=0,
+                         ma20=None):
+    """
+    [v4.3 增强] 红绿灯快判模式 — 4价位(S1/S2/R1+现价) + 行动强度
+    用于异动/快速判断场景，给出最简明的决策指引。
+
+    Args:
+        current_price: 当前价格
+        s1: 近30日最低支撑位
+        r1: 近30日最高阻力位
+        profit_pct: 盈亏百分比(用于文案)
+        danger_count: 风险警报数量(量化行动强度) [v4.3新增]
+        ma20: MA20均线价格(作为中间参照) [v4.3新增]
+
+    Returns:
+        dict: { color, signal, action, intensity, key_price_levels }
+    """
+    if not current_price or current_price <= 0:
+        return {"color": "gray", "signal": "无法获取价格数据", "action": "等待数据",
+                "intensity": 0, "key_price_levels": []}
+
+    # 核心逻辑：现价相对于S1/R1的位置决定信号
+    _r1_safe = r1 * 0.98 if r1 else float('inf')
+    _s1_safe = s1 * 1.02 if s1 else 0
+
+    # [v4.3 5.2] 行动强度量化 (0~3级)
+    _intensity = min(3, max(0, danger_count))
+
+    if current_price >= _r1_safe:
+        # 接近或超过近期高点
+        color = "yellow"
+        signal = "接近压力区" if current_price < r1 else "突破近期高点"
+        _base_action = f"至少减仓1/3，锁定利润(当前盈利{profit_pct:+.1f}%)" if profit_pct else "考虑分批止盈"
+        # [v4.3 5.2] danger_count强化建议
+        if _intensity >= 2:
+            action = _base_action + " [风险警报较多，建议加大减仓力度]"
+        elif _intensity == 1:
+            action = _base_action + " [存在风险信号]"
+        else:
+            action = _base_action
+        # [v4.3 5.2] 加入S2(MA20)作为中间参照
+        levels = [
+            {"label": "R1 阻力位", "price": round(r1, 2) if r1 else None, "role": "第一减仓位"},
+            {"label": "现价", "price": round(current_price, 2), "role": "当前位置"},
+            {"label": "S2 MA20", "price": round(ma20, 2) if ma20 else None, "role": "趋势参考线"},
+            {"label": "S1 支撑位", "price": round(s1, 2) if s1 else None, "role": "防守底线"},
+        ]
+    elif current_price <= _s1_safe:
+        color = "red"
+        signal = "逼近支撑位" if current_price > s1 else "跌破支撑位"
+        _base_action = "警惕破位风险，准备止损" if current_price > s1 else "趋势已破坏，建议减仓/清仓"
+        if _intensity >= 2:
+            action = _base_action + " [多重警报确认，立即执行止损]"
+        elif _intensity == 1:
+            action = _base_action + " [有预警信号]"
+        else:
+            action = _base_action
+        levels = [
+            {"label": "R1 阻力位", "price": round(r1, 2) if r1 else None, "role": "反弹目标"},
+            {"label": "S2 MA20", "price": round(ma20, 2) if ma20 else None, "role": "上方压力"},
+            {"label": "现价", "price": round(current_price, 2), "role": "当前位置"},
+            {"label": "S1 支撑位", "price": round(s1, 2) if s1 else None, "role": "最后防线"},
+        ]
+    else:
+        color = "green"
+        signal = "安全区间"
+        if not danger_count or danger_count == 0:
+            action = "持有为主，关注量价变化"
+        elif danger_count == 1:
+            action = "中性偏弱，适度降低仓位"
+        else:
+            action = f"偏弱({danger_count}项警报)，建议减仓至半仓以下"
+        levels = [
+            {"label": "R1 阻力位", "price": round(r1, 2) if r1 else None, "role": "上方目标"},
+            {"label": "现价", "price": round(current_price, 2), "role": "当前位置（安全）"},
+            {"label": "S2 MA20", "price": round(ma20, 2) if ma20 else None, "role": "下方支撑"},
+            {"label": "S1 支撑位", "price": round(s1, 2) if s1 else None, "role": "安全垫"},
+        ]
+
+    # 过滤掉None价格的level（当ma20不可用时）
+    levels = [lv for lv in levels if lv.get("price") is not None]
+    if len(levels) < 3:
+        # 如果过滤后太少，回退到原始3价位模式
+        levels = [
+            {"label": "R1 阻力位", "price": round(r1, 2) if r1 else None, "role": "顶部"},
+            {"label": "现价", "price": round(current_price, 2), "role": "当前"},
+            {"label": "S1 支撑位", "price": round(s1, 2) if s1 else None, "role": "底部"},
+        ]
+
+    return {
+        "color": color,
+        "signal": signal,
+        "action": action,
+        "intensity": _intensity,
+        "key_price_levels": levels,
+    }
+
 
 @position_bp.route("/api/positions/<int:position_id>/sell-check")
 @login_required
@@ -701,6 +870,7 @@ def get_sell_check(position_id):
     # --- 获取K线 + 实时行情 ---
     data_source = "tushare"
     realtime_price = 0.0
+    quote = {}  # 实时行情数据
     try:
         end_date = datetime.now().strftime("%Y%m%d")
         df = pro.daily(ts_code=ts_code, end_date=end_date, limit=60)
@@ -755,46 +925,270 @@ def get_sell_check(position_id):
 
     # MA5/MA20
     ma5 = round(sum(closes[-5:]) / 5, 2) if len(closes) >= 5 else None
+    # 【v3.5 新增】MA10 中期均线
+    ma10 = round(sum(closes[-10:]) / 10, 2) if len(closes) >= 10 else None
     ma20_val = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else None
+    ma5_gt_ma20 = None
 
-    # 均线排列
-    if ma5 and ma20_val and latest < ma20_val < ma5:
-        ma_signal = "weak_bearish"; ma_label = "多头转弱"; ma_passed = True; ma_sell = False
-    elif ma5 and ma20_val and latest < min(ma5, ma20_val):
-        ma_signal = "bearish"; ma_label = "空头排列"; ma_passed = False; ma_sell = True
-    elif ma5 and ma20_val:
-        ma_signal = "bullish"; ma_label = "多头排列"; ma_passed = True; ma_sell = False
+    def _ma_close(a, b, tol=0.02):
+        """判断两根均线是否接近（2%容差）"""
+        if a is None or b is None or b == 0:
+            return False
+        return abs(a - b) / b <= tol
+
+    # 均线排列 (v3.5 升级为三层MA5/MA10/MA20判断)
+    ma5_gt_ma20 = (ma5 and ma20_val and ma5 > ma20_val)
+    ma5_gt_ma10 = (ma5 and ma10 and ma5 > ma10)
+    ma10_gt_ma20 = (ma10 and ma20_val and ma10 > ma20_val)
+    
+    # 初始化ma_detail，确保所有分支都有值
+    ma_detail = f"MA5={ma5 or 'N/A'} | MA10={ma10 or 'N/A'} | MA20={ma20_val or 'N/A'}"
+    ma_signal = "unknown"
+    ma_label = "数据不足"
+    ma_passed = None
+    ma_sell = False
+    
+    if ma5 and ma10 and ma20_val:
+        # 【三层完整判断】
+        if ma5_gt_ma10 and ma10_gt_ma20:
+            # 完美多头：MA5 > MA10 > MA20
+            ma_signal = "bullish"
+            ma_label = "多头排列(强势)"
+            ma_passed = True
+            ma_sell = False
+            ma_color = "#22c55e"
+            ma_icon = "🟢"
+            ma_advice = "均线完美多头排列(短>中>长)，趋势向上，安心持有"
+            ma_detail = f"MA5={ma5:.2f} > MA10={ma10:.2f} > MA20={ma20_val:.2f}"
+        elif ma5_gt_ma20 and not ma5_gt_ma10:
+            # 短期跌破中期但仍在长期之上 → 转弱信号
+            if _ma_close(ma5, ma10):
+                ma_signal = "neutral"
+                ma_label = "多头整理(接近MA10)"
+                ma_passed = True
+                ma_sell = False
+                ma_color = "#eab308"
+                ma_icon = "🟡"
+                ma_advice = "短期均线回落至MA10附近，进入震荡整理"
+                ma_detail = f"MA5≈{ma5:.2f} ≈ MA10={ma10:.2f} > MA20={ma20_val:.2f}"
+            else:
+                ma_signal = "weak_bearish"
+                ma_label = "多头转弱(破MA10)"
+                ma_passed = False
+                ma_sell = True
+                ma_color = "#f97316"
+                ma_icon = "🟠"
+                ma_advice = "价格已跌破MA10中期均线，短期动能减弱"
+                ma_detail = f"MA5={ma5:.2f} < MA10={ma10:.2f} 但仍 > MA20={ma20_val:.2f}"
+        elif not ma5_gt_ma20 and ma5_gt_ma10 and ma10_gt_ma20:
+            # MA5在MA10之上但MA10接近或跌破MA20
+            ma_signal = "weak_bearish"
+            ma_label = "中期转弱(MA10近MA20)"
+            ma_passed = False
+            ma_sell = True
+            ma_color = "#f97316"
+            ma_icon = "🟠"
+            ma_advice = "中期趋势走弱，MA10逼近MA20，注意风险"
+            ma_detail = f"MA5={ma5:.2f} > MA10={ma10:.2f} ≈ MA20={ma20_val:.2f}"
+        elif not ma5_gt_ma10 and not ma10_gt_ma20:
+            # 完全空头：MA5 < MA10 < MA20
+            ma_signal = "bearish"
+            ma_label = "空头排列(弱势)"
+            ma_passed = False
+            ma_sell = True
+            ma_color = "#ef4444"
+            ma_icon = "🔴"
+            ma_advice = "均线空头排列，趋势向下，建议减仓或清仓"
+            ma_detail = f"MA5={ma5:.2f} < MA10={ma10:.2f} < MA20={ma20_val:.2f}"
+        else:
+            # 降级：MA10数据不足时回退到二线判断(MA5 vs MA20)
+            ma5_gt_ma20 = (ma5 > ma20_val) if (ma5 and ma20_val) else False
+            if ma5_gt_ma20:
+                if latest >= ma5:
+                    ma_signal = "bullish"
+                    ma_label = "多头排列(强势)"
+                    ma_passed = True
+                    ma_sell = False
+                    ma_detail = f"MA5={ma5:.2f} > MA20={ma20_val:.2f}（MA10数据不足，二线判断）"
+                elif latest >= ma20_val:
+                    ma_signal = "weak_bearish"
+                    ma_label = "多头排列(转弱)"
+                    ma_passed = True
+                    ma_sell = False
+                    ma_detail = f"MA5={ma5:.2f} > 现价 > MA20={ma20_val:.2f}"
+                else:  # latest < ma20_val
+                    ma_signal = "bearish"
+                    ma_label = "多头排列(破位)"
+                    ma_passed = False
+                    ma_sell = True
+                    ma_detail = f"现价 {latest:.2f} < MA20={ma20_val:.2f}（破位）"
+            # 空头排列：MA5 < MA20（降级）
+            else:
+                if latest <= ma20_val:
+                    ma_signal = "bearish"
+                    ma_label = "空头排列(弱势)"
+                    ma_passed = False
+                    ma_sell = True
+                    ma_detail = f"MA5={ma5:.2f} < MA20={ma20_val:.2f} 且现价{latest:.2f}<MA20"
+                elif latest <= ma5:
+                    ma_signal = "weak_bearish"
+                    ma_label = "空头排列(反弹)"
+                    ma_passed = False
+                    ma_sell = False
+                    ma_detail = f"MA5={ma5:.2f}<MA20={ma20_val:.2f}, 但现价{latest:.2f}>MA5"
+                else:  # latest > ma5
+                    ma_signal = "bullish"
+                    ma_label = "空头排列(反转)"
+                    ma_passed = True
+                    ma_sell = False
+                    ma_detail = f"MA5={ma5:.2f}<MA20={ma20_val:.2f}, 现价{latest:.2f}>MA5，有反转迹象"
     else:
-        ma_signal = "unknown"; ma_label = "数据不足"; ma_passed = None; ma_sell = False
-    ma_status = {"signal": ma_signal, "label": ma_label, "ma5": ma5, "ma20": ma20_val,
-                 "passed": ma_passed, "suggest_sell": ma_sell}
+        ma_signal = "unknown"
+        ma_label = "数据不足"
+        ma_passed = None
+        ma_sell = False
+    ma_status = {"signal": ma_signal, "label": ma_label, "ma5": ma5, "ma10": ma10, "ma20": ma20_val,
+                 "passed": ma_passed, "suggest_sell": ma_sell, "ma5_gt_ma20": (ma5 > ma20_val) if (ma5 and ma20_val) else None,
+                 "detail": ma_detail}
 
-    # 量价配合
+    # 量价配合（交互体验优化版）
     vol_ma5 = sum(volumes[-5:]) / 5 if len(volumes) >= 5 else 1
     vol_ratio = round(volumes[-1] / vol_ma5, 2) if vol_ma5 > 0 else 1
-    pct_1d = (closes[-1] - closes[-2]) / closes[-2] * 100 if len(closes) >= 2 else 0
+    
+    # 【v3.5.1 修复】用实时价格计算今日涨跌幅，与通达信/三看确认一致
+    # closes[-1]是Tushare日线收盘价(可能有延迟)，latest是新浪实时价
+    # 三看确认已做此修复(sina_quote.price替换closes[-1])，卖出检查需同步
+    pct_1d = (latest - closes[-2]) / closes[-2] * 100 if len(closes) >= 2 and closes[-2] > 0 else 0
+    
+    # DEBUG: 确认日涨跌计算数据源（v3.5.1 调试日志）
+    print(f"[DEBUG sell-check {ts_code}] latest(实时)={latest}, closes[-2](前收)={closes[-2]:.3f}, "
+          f"closes[-1](Tushare收盘)={df['close'].iloc[-1]:.3f} if not df.empty else 'N/A', "
+          f"pct_1d(实时)={pct_1d:.2f}%, data_source={data_source}")
+    
+    # 交互体验优化：多层级描述系统
     if vol_ratio > 1.5 and pct_1d < -0.5:
-        vp_signal = "volume_down"; vp_label = "放量下跌"; vp_passed = False; vp_sell = True
-    elif vol_ratio < 0.6 and pct_1d < -0.5:
-        vp_signal = "weak_down"; vp_label = "缩量下跌"; vp_passed = True; vp_sell = False
+        vp_signal = "volume_down"
+        vp_label = "放量下跌，主力出货信号"
+        vp_passed = False
+        vp_sell = True
+        vp_color = "#ef4444"  # 红色
+        vp_icon = "📉"
+        vp_advice = "主力出货信号，建议减仓或止损"
+        vp_explanation = f"成交量比5日均量高出{((vol_ratio-1)*100):.0f}%，但价格下跌{pct_1d:.1f}%，表明抛压沉重，可能有主力出货"
+        vp_action_level = "high"
+        vp_suggested_action = "减仓30-50%或设置止损"
+    elif vol_ratio < 0.8 and pct_1d < -0.5:
+        vp_signal = "weak_down"
+        vp_label = "缩量下跌，抛压减轻"
+        vp_passed = True
+        vp_sell = False
+        vp_color = "#3b82f6"  # 蓝色
+        vp_icon = "↘️"
+        vp_advice = "抛压减轻但趋势弱，观望"
+        vp_explanation = f"成交量比5日均量低{((1-vol_ratio)*100):.0f}%，价格下跌{pct_1d:.1f}%，抛压减轻但缺乏买盘支撑"
+        vp_action_level = "medium"
+        vp_suggested_action = "观望，等待放量确认方向"
     elif vol_ratio > 1.5 and pct_1d > 0.5:
-        vp_signal = "volume_up"; vp_label = "放量上涨"; vp_passed = True; vp_sell = False
-    elif vol_ratio < 0.7:
-        vp_signal = "low_vol"; vp_label = "缩量横盘"; vp_passed = True; vp_sell = False
+        vp_signal = "volume_up"
+        vp_label = "放量上涨，动能增强"
+        vp_passed = True
+        vp_sell = False
+        vp_color = "#22c55e"  # 绿色
+        vp_icon = "🔥"
+        vp_advice = "量价配合良好，动能增强，可持有或加仓"
+        vp_explanation = f"成交量比5日均量高出{((vol_ratio-1)*100):.0f}%，价格上涨{pct_1d:.1f}%，量价齐升，上涨动能强劲"
+        vp_action_level = "low"
+        vp_suggested_action = "可持有或小幅加仓，关注持续性"
+    elif vol_ratio < 0.8:
+        vp_signal = "low_vol"
+        vp_label = "成交清淡，缺乏动能"
+        vp_passed = True
+        vp_sell = False
+        vp_color = "#94a3b8"  # 灰色
+        vp_icon = "⚪"
+        vp_advice = "交投清淡，市场关注度低，观望等待放量信号"
+        vp_explanation = f"成交量比5日均量低{((1-vol_ratio)*100):.0f}%，市场关注度下降，缺乏明确方向"
+        vp_action_level = "low"
+        vp_suggested_action = "观望，等待放量确认方向"
     else:
-        vp_signal = "normal"; vp_label = "量价正常"; vp_passed = True; vp_sell = False
-    volume_price = {"signal": vp_signal, "label": vp_label, "vol_ratio": vol_ratio,
-                   "passed": vp_passed, "suggest_sell": vp_sell, "pct_chg": round(pct_1d, 2)}
+        vp_signal = "normal"
+        vp_label = "成交量正常"
+        vp_passed = True
+        vp_sell = False
+        vp_color = "#6b7280"  # 中灰色
+        vp_icon = "📊"
+        vp_advice = "成交量稳定，维持当前仓位"
+        vp_explanation = f"成交量与5日均量基本持平（量比{vol_ratio:.1f}），价格波动{pct_1d:+.1f}%，属于正常市场波动"
+        vp_action_level = "none"
+        vp_suggested_action = "维持当前仓位，按原计划操作"
+    
+    # 构建增强的量价配合对象
+    volume_price = {
+        "signal": vp_signal,
+        "label": vp_label,
+        "vol_ratio": vol_ratio,
+        "passed": vp_passed,
+        "suggest_sell": vp_sell,
+        "pct_chg": round(pct_1d, 2),
+        # 交互体验增强字段
+        "color": vp_color,
+        "icon": vp_icon,
+        "advice": vp_advice,
+        "strength": "strong" if vol_ratio > 1.5 else "moderate" if vol_ratio > 1.2 else "normal" if vol_ratio > 0.8 else "weak",
+        # 新增解释性字段（P0优化）
+        "explanation": vp_explanation,
+        "action_level": vp_action_level,
+        "suggested_action": vp_suggested_action,
+        "vol_interpretation": "非常活跃" if vol_ratio > 1.5 else "活跃" if vol_ratio > 1.2 else "正常" if vol_ratio > 0.8 else "清淡",
+        "price_trend": "上涨" if pct_1d > 0.5 else "下跌" if pct_1d < -0.5 else "震荡"
+    }
 
-    # 连续涨跌
-    consec_up = consec_down = 0
-    for i in range(len(closes) - 1, max(0, len(closes) - 10), -1):
-        if i > 0 and closes[i] > closes[i - 1]:
-            consec_up += 1; consec_down = 0
-        elif i > 0 and closes[i] < closes[i - 1]:
-            consec_down += 1; consec_up = 0
+    # 连续涨跌判断（v3.4.4 重写）
+    # 核心思路：构建方向数组，从最近一天开始找连续同向天数
+    # directions[i] = 第i天相对第(i-1)天的方向 (1=涨, -1=跌, 0=平盘)
+    
+    directions = []
+    for i in range(len(closes) - 1, 0, -1):
+        diff = closes[i] - closes[i - 1]
+        # 涨跌幅阈值 0.01元，避免精度误差
+        if diff > 0.01:
+            directions.append(1)   # 涨
+        elif diff < -0.01:
+            directions.append(-1)  # 跌
         else:
+            directions.append(0)   # 平盘
+    
+    # 从最近一天开始，找到第一个非平盘方向后的连续同向天数
+    consec_up, consec_down = 0, 0
+    found_direction = None
+    consec_count = 0
+    
+    for d in directions:
+        if d == 0:
+            # 平盘跳过（不中断已有计数）
+            if found_direction is not None:
+                consec_count += 1  # 平盘也计入连续天数
+            continue
+        if found_direction is None:
+            # 找到第一个非平盘方向
+            found_direction = d
+            consec_count = 1
+        elif d == found_direction:
+            # 同方向继续
+            consec_count += 1
+        else:
+            # 方向反转，停止
             break
+    
+    if found_direction == 1:
+        consec_up = consec_count
+        consec_down = 0
+    elif found_direction == -1:
+        consec_down = consec_count
+        consec_up = 0
+    # else: 全部平盘，保持0
+    
+    # 分类逻辑保持不变
     if consec_up >= 5:
         cs_signal = "overbought"; cs_label = f"连涨{consec_up}天过热"; cs_passed = False; cs_sell = True
     elif consec_down >= 5:
@@ -815,34 +1209,40 @@ def get_sell_check(position_id):
     dist_to_high = (high_30d - latest) / latest * 100 if latest > 0 else 0
     dist_to_low = (latest - low_30d) / latest * 100 if latest > 0 else 0
     if dist_to_low < 3:
-        pa_signal = "near_bottom"; pa_label = f"贴近底部({dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
+        pa_signal = "near_bottom"; pa_label = f"底部区域(距30日底部{dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
     elif dist_to_high < 3:
-        pa_signal = "near_top"; pa_label = f"贴近顶部({dist_to_high:.1f}%)"; pa_passed = False; pa_sell = True
+        pa_signal = "near_top"; pa_label = f"顶部区域(距30日顶部{dist_to_high:.1f}%)"; pa_passed = False; pa_sell = True
     elif dist_to_low < 8:
-        pa_signal = "low_area"; pa_label = f"偏低位置({dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
+        pa_signal = "low_area"; pa_label = f"偏低位置(距30日底部{dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
     elif dist_to_high < 8:
-        pa_signal = "high_area"; pa_label = f"偏高位置({dist_to_high:.1f}%)"; pa_passed = False; pa_sell = False
+        pa_signal = "high_area"; pa_label = f"接近30日高点(距顶部{dist_to_high:.1f}%)"; pa_passed = False; pa_sell = True  # 偏高位置应触发卖出
     else:
-        pa_signal = "neutral"; pa_label = f"中间位置(高-{dist_to_high:.1f}%/低+{dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
+        pa_signal = "neutral"; pa_label = f"中间位置(距30日高-{dist_to_high:.1f}%/距30日低+{dist_to_low:.1f}%)"; pa_passed = True; pa_sell = False
     position_analysis = {"dist_to_high_pct": round(dist_to_high, 1), "dist_to_low_pct": round(dist_to_low, 1),
                          "signal": pa_signal, "label": pa_label,
                          "passed": pa_passed, "suggest_sell": pa_sell}
 
-    # 综合评分 (0-100, 分越高越应该持有不卖)
-    score = 50
+    # 综合评分 (0-100, 分越高越应该持有不卖) - v3.4.3 保守化调整（方案1）
+    score = 60  # 基础分60，满分100可达
     reasons_list = []
-    if not ma_sell: score += 15; reasons_list.append(f"均线{ma_label}(+15)")
-    else: score -= 10; reasons_list.append(f"均线{ma_label}(-10)")
-    if not vp_sell: score += 15; reasons_list.append(f"量价{vp_label}(+15)")
-    else: score -= 15; reasons_list.append(f"量价{vp_label}(-15)")
+    # 均线：失败惩罚 > 通过奖励
+    if not ma_sell: score += 10; reasons_list.append(f"均线{ma_label}(+10)")
+    else: score -= 20; reasons_list.append(f"均线{ma_label}(-20)")
+    # 量价：放量下跌是强信号，加重扣分
+    if not vp_sell: score += 10; reasons_list.append(f"量价{vp_label}(+10)")
+    else: score -= 25; reasons_list.append(f"量价{vp_label}(-25)")
+    # 走势：失败惩罚 > 通过奖励
     if not cs_sell: score += 10; reasons_list.append(f"走势{cs_label}(+10)")
-    else: score -= 10; reasons_list.append(f"走势{cs_label}(-10)")
+    else: score -= 15; reasons_list.append(f"走势{cs_label}(-15)")
+    # 位置：对称调整
     if not pa_sell: score += 10; reasons_list.append(f"位置{pa_label}(+10)")
-    else: score -= 5; reasons_list.append(f"位置{pa_label}(-5)")
+    else: score -= 10; reasons_list.append(f"位置{pa_label}(-10)")
 
     score = max(0, min(100, score))
-    if score >= 75: verdict = "hold"; verdict_label = "非紧急卖出时机"
-    elif score >= 50: verdict = "reduce"; verdict_label = "可考虑减仓"
+    # 细分档位
+    if score >= 90: verdict = "hold_strong"; verdict_label = "强烈持有"
+    elif score >= 75: verdict = "hold"; verdict_label = "正常持有"
+    elif score >= 50: verdict = "reduce"; verdict_label = "观望/减仓"
     elif score >= 25: verdict = "sell"; verdict_label = "建议减仓"
     else: verdict = "sell_strong"; verdict_label = "建议清仓"
 
@@ -855,51 +1255,117 @@ def get_sell_check(position_id):
                     "summary": f"{verdict_label} (综合评分{score}分)", "reasons": reasons_list}
     }
 
-    # --- 价格参考位 ---
+    # ── [v4.2 P2-7] 统一ATR波动率分析（替代原来的内联计算）──
+    from helpers import calc_atr_profile, calc_price_time_prob, calc_price_hit_rate
+
     recent_30_lows = lows[-30:] if len(lows) >= 30 else lows
+    recent_30_highs = highs[-30:] if len(highs) >= 30 else highs
     s1 = round(min(recent_30_lows), 2)
     s2 = ma20_val or round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else s1
-    s3 = round(avg_cost * 0.95, 2) if avg_cost else None
 
-    r1 = round(max(highs[-30:]), 2) if len(highs) >= 30 else round(max(highs), 2)
-    r2 = round(s2 * 1.10, 2)
-    r3 = round(latest * 1.10, 2)
-    r4 = round(avg_cost * 1.10, 2) if avg_cost else None
-    r5 = round(avg_cost * 1.20, 2) if avg_cost else None
+    # ── [v4.2 P2-7] 统一ATR波动率分析（替代原来的内联计算）──
+    atr = calc_atr_profile(closes=closes, highs=highs, lows=lows, latest_price=latest)
+    _atr_stop_pct = atr.get("stop_loss_pct", 0.08)
+    _po = atr.get("pressure_offset", 0.12)
+    _to = atr.get("target_offset", 0.15)
 
+    s3 = round(avg_cost * (1 - _atr_stop_pct), 2) if avg_cost else None
+    s3_label = f"成本-{_atr_stop_pct*100:.0f}%({atr['tier_label']})"
+
+    # 动态压力位：MA20 + ATR压力偏移 和 现价+偏移*0.67 取较高值
+    r1 = round(max(recent_30_highs), 2) if len(recent_30_highs) >= 1 else round(max(highs), 2)
+    _r2_from_ma = round(s2 * (1 + _po), 2)
+    _r2_dynamic = round(latest * (1 + _po * 0.67), 2) if latest else _r2_from_ma
+    r2 = max(_r2_from_ma, _r2_dynamic) if latest else _r2_from_ma
+
+    # 成本参考位也用 ATR 自适应（替代硬编码+10%/+20%）
+    r4 = round(avg_cost * (1 + _to * 0.67), 2) if avg_cost else None  # 第一止盈目标
+    r5 = round(avg_cost * (1 + _to), 2) if avg_cost else None          # 理想收益目标
+
+    # ── [v4.2 P2-8] 为每个价位计算时间预期和达成概率 ──
+    def _tp(target_price, direction):
+        """快捷函数：计算单个价位的时间概率"""
+        return calc_price_time_prob(
+            current_price=latest, target_price=target_price,
+            atr_profile=atr, direction=direction,
+            closes=closes, highs=highs, lows=lows)
+
+    # [P0-1] 每个价位附带推荐操作标签 + ★关键动作标注 + P2-8时间概率
     supports = [
-        {"label": "S2 MA20均线", "price": s2, "type": "medium", "desc": "中期趋势线，跌破说明趋势转弱"},
-        {"label": "S1 近30日最低", "price": s1, "type": "strong", "desc": "近期强支撑，跌破视为破位"},
+        {"label": "S2 MA20均线", "price": s2, "type": "medium",
+         "desc": "中期趋势线，跌破说明趋势转弱", "action": "减仓观察", "action_ratio": 50, "is_key": False,
+         "time_prob": _tp(s2, "down")},
+        {"label": "S1 近30日最低", "price": s1, "type": "strong",
+         "desc": "近期强支撑，跌破视为破位", "action": "加仓/反弹点", "action_ratio": 30, "is_key": True,
+         "time_prob": _tp(s1, "down")},
     ]
     if s3:
-        supports.insert(0, {"label": "S3 成本-5%", "price": s3, "type": "soft", "desc": f"止损底线 ¥{s3}"})
+        supports.insert(0, {"label": s3_label, "price": s3, "type": "soft",
+                            "desc": f"ATR{atr['tier_label']}止损底线(波动率自适应)", "action": "硬止损清仓", "action_ratio": 100, "is_key": True,
+                            "time_prob": _tp(s3, "down")})
 
     resistances = [
-        {"label": "R1 近30日最高", "price": r1, "type": "strong", "desc": "激进止盈位"},
-        {"label": "R2 MA20+10%", "price": r2, "type": "medium", "desc": "合理止盈区"},
-        {"label": "R3 现价+10%", "price": r3, "type": "soft", "desc": "涨停极限位"},
+        {"label": "R1 近30日最高", "price": r1, "type": "strong",
+         "desc": "近期阻力顶，突破确认上涨动能", "action": "第一减仓位", "action_ratio": 33, "is_key": True,
+         "time_prob": _tp(r1, "up")},
+        {"label": "R2 动态压力位", "price": r2, "type": "medium",
+         "desc": f"ATR{atr['tier_label']}止盈区(MA+{_po*100:.0f}%)", "action": "分批止盈", "action_ratio": 50, "is_key": False,
+         "time_prob": _tp(r2, "up")},
     ]
     if r4:
-        resistances.append({"label": "R4 成本+10%", "price": r4, "type": "soft", "desc": "标准止盈目标"})
+        resistances.append({"label": f"R4 成本+{_to*67:.0f}%", "price": r4, "type": "soft",
+                            "desc": f"第一止盈目标(ATR{atr['tier_label']})", "action": "可全出/落袋为安", "action_ratio": 100, "is_key": True,
+                            "time_prob": _tp(r4, "up")})
     if r5:
-        resistances.append({"label": "R5 成本+20%", "price": r5, "type": "soft", "desc": "理想收益目标"})
+        resistances.append({"label": f"R5 成本+{_to*100:.0f}%", "price": r5, "type": "soft",
+                            "desc": f"理想收益目标(ATR{atr['tier_label']})", "action": "留底仓", "action_ratio": 50, "is_key": False,
+                            "time_prob": _tp(r5, "up")})
+
     # 支撑位按价格升序排列（从低到高），压力位按价格降序（从高到低）
     supports.sort(key=lambda x: (x["price"] or 0))
     resistances.sort(key=lambda x: (x["price"] or 0), reverse=True)
 
+    # --- 风险警报（前置初始化，traffic_light引用需要）---
+    danger_count = 0
+    warning_count = 0
+    alerts = []
+
     price_levels = {
         "resistances": resistances, "supports": supports,
         "current_price": latest, "ma20": s2,
-        "cost_ref": {"avg_cost": avg_cost, "cost_minus5": s3, "cost_plus10": r4, "cost_plus20": r5},
-        "calc_basis": f"基于近{len(df)}个交易日K线数据计算"
+        "cost_ref": {"avg_cost": avg_cost, "cost_minus": s3, "cost_plus_target": r4, "cost_plus_double": r5},
+        "calc_basis": f"基于近{len(df)}个交易日K线数据计算(ATR{atr['tier_label']}全面自适应 v4.2)",
+        "version": "v4.2",
+        # [P2-7] ATR波动率档案
+        "atr_profile": {k: v for k, v in atr.items() if k != "raw_tr_list"},
+        # [P2-8] 版本标识（含时间概率）
+        "has_time_prob": True,
+        # [P1-4] 红绿灯快判模式：4价位 + 行动强度
+        "traffic_light": _calc_traffic_light(latest, s1, r1, profit_pct, danger_count, ma20=s2)
     }
 
-    # --- 风险警报 ---
-    alerts = []
-    danger_count = 0
-    warning_count = 0
+    # ── [v4.2 P2-9] 历史价位命中率统计 ──
+    try:
+        _sp_prices = [s["price"] for s in supports if s.get("price")]
+        _rp_prices = [r["price"] for r in resistances if r.get("price")]
+        # 用更长周期数据(120天)做回测
+        df_long = pro.daily(ts_code=ts_code, end_date=end_date, limit=120)
+        if not df_long.empty:
+            price_levels["hit_rate"] = calc_price_hit_rate(
+                df=df_long,
+                support_prices=_sp_prices,
+                resistance_prices=_rp_prices
+            )
+    except Exception as e:
+        print(f"[WARN] P2-9 hit_rate 计算跳过: {e}")
+
+    # --- 风险警报逻辑（变量已在上方初始化）---
     if ma_sell and ma_signal == "bearish":
-        alerts.append({"level": "warning", "icon": "📉", "text": f"均线空头排列(MA5<{ma20_val})"})
+        if ma5_gt_ma20:  # 多头排列但价格破位
+            alert_text = f"多头破位(价格<MA20={ma20_val})"
+        else:  # 空头排列
+            alert_text = f"均线空头排列(MA5<{ma20_val})"
+        alerts.append({"level": "warning", "icon": "📉", "text": alert_text})
         warning_count += 1
     if vp_sell and vp_signal == "volume_down":
         alerts.append({"level": "danger", "icon": "📉", "text": f"放量下跌(量比{vol_ratio})，主力出货信号"})
@@ -921,6 +1387,52 @@ def get_sell_check(position_id):
         {"action": "half_sell", "label": f"减半卖出 ({hold_vol // 2}股)", "volume": hold_vol // 2, "price_hint": "使用现价"},
     ]
 
+    # [v4.3 5.3] 买入/卖出场景联动：B锚点与A价位交叉对比
+    _buy_sell_link = None
+    try:
+        from helpers import calc_buy_price_anchors
+        _bpa = calc_buy_price_anchors(df, latest_realtime=latest)
+        if _bpa and _bpa.get("target_profit") and r2:
+            _b_target = _bpa["target_profit"].get("price")
+            _b_safety = _bpa["safety_support"].get("price")
+            _b_stop = _bpa["stop_loss_line"].get("price")
+            _buy_sell_link = {
+                "buy_anchors": {
+                    "target_profit": _b_target,
+                    "safety_support": _b_safety,
+                    "stop_loss_line": _b_stop,
+                    "buy_zone_low": _bpa.get("buy_zone", {}).get("low"),
+                    "buy_zone_high": _bpa.get("buy_zone", {}).get("high"),
+                },
+                # B-target vs A-R2: 买入目标是否已达成或超越卖出压力位
+                "cross_check": {
+                    # target_profit(买入第一目标) vs R2(动态压力位)
+                    "target_vs_r2": {
+                        "buy_target": round(_b_target, 2) if _b_target else None,
+                        "sell_r2": r2,
+                        "status": "exceeded" if (_b_target and latest >= _b_target)
+                                 else ("approaching" if (_b_target and r2 and latest >= r2 * 0.95) else "not_reached"),
+                        "note": (f"现价{latest:.2f}已超过买入目标{_b_target:.2f}" if (_b_target and latest >= _b_target)
+                                else f"距买入目标{_b_target:.2f}还需涨{((_b_target-latest)/latest*100):.1f}%") if _b_target else None,
+                    },
+                    # safety_support(安全垫) vs S1(30日最低): 是否跌破原始支撑
+                    "safety_vs_s1": {
+                        "buy_safety": _b_safety,
+                        "sell_s1": s1,
+                        "status": "broken" if (_b_safety and latest < _b_safety)
+                                  else ("near" if (_b_safety and latest < _b_safety * 1.03) else "safe"),
+                    },
+                    # stop_loss_line vs S3(cost止损)
+                    "stop_vs_s3": {
+                        "buy_stop": _b_stop,
+                        "sell_s3": s3,
+                        "closer_one": "B止损" if (_b_stop and s3 and _b_stop > s3) else ("S3成本止损" if s3 else None),
+                    }
+                },
+            }
+    except Exception as e:
+        print(f"[WARN] 5.3 买卖联动计算跳过: {e}")
+
     return jsonify({
         "position": {
             "id": position_id, "ts_code": ts_code, "name": stock_name,
@@ -936,6 +1448,8 @@ def get_sell_check(position_id):
         "risk_alerts": alerts,
         "quick_actions": quick_actions,
         "data_source": data_source,
+        # [v4.3 5.3]
+        "buy_sell_linkage": _buy_sell_link,
         "check_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
@@ -980,6 +1494,7 @@ def get_position_advice(position_id):
     realtime_data = get_realtime_quotes([ts_code])
     quote = realtime_data.get(ts_code, {})
     realtime_price = quote.get("price", 0)
+    realtime_pct = quote.get("pct_chg", 0)  # 获取今日涨跌幅
     if realtime_price > 0:
         closes[-1] = realtime_price
         latest = realtime_price
@@ -992,17 +1507,57 @@ def get_position_advice(position_id):
     ma20 = round(sum(closes[-20:]) / 20, 3) if len(closes) >= 20 else closes[-1]
     vol_ma5 = round(sum(volumes[-5:]) / 5, 0) if len(volumes) >= 5 else volumes[-1]
 
+    # 连续涨跌判断（v3.4.4 重写）
+    # 核心思路：构建方向数组，从最近一天开始找连续同向天数
+    # directions[i] = 第i天相对第(i-1)天的方向 (1=涨, -1=跌, 0=平盘)
+    
+    print(f"[DEBUG] data_source={data_source}, realtime_price={realtime_price}, realtime_pct={realtime_pct}")
+    print(f"[DEBUG] closes count={len(closes)}, last5={closes[-5:] if len(closes)>=5 else closes}")
+    
+    directions = []
+    for i in range(len(closes) - 1, 0, -1):
+        diff = closes[i] - closes[i - 1]
+        # 涨跌幅阈值 0.01元，避免精度误差
+        if diff > 0.01:
+            directions.append(1)   # 涨
+        elif diff < -0.01:
+            directions.append(-1)  # 跌
+        else:
+            directions.append(0)   # 平盘
+    
+    print(f"[DEBUG] directions(前10个, 近→远)={directions[:10]}")
+    
+    # 从最近一天开始，找到第一个非平盘方向后的连续同向天数
     consec_up, consec_down = 0, 0
-    for i in range(len(closes) - 1, 0, -1):
-        if closes[i] > closes[i - 1]:
-            consec_up += 1
+    found_direction = None
+    consec_count = 0
+    
+    for d in directions:
+        if d == 0:
+            # 平盘跳过（不中断已有计数）
+            if found_direction is not None:
+                consec_count += 1  # 平盘也计入连续天数
+            continue
+        if found_direction is None:
+            # 找到第一个非平盘方向
+            found_direction = d
+            consec_count = 1
+        elif d == found_direction:
+            # 同方向继续
+            consec_count += 1
         else:
+            # 方向反转，停止
             break
-    for i in range(len(closes) - 1, 0, -1):
-        if closes[i] < closes[i - 1]:
-            consec_down += 1
-        else:
-            break
+    
+    if found_direction == 1:
+        consec_up = consec_count
+        consec_down = 0
+    elif found_direction == -1:
+        consec_down = consec_count
+        consec_up = 0
+    # else: 全部平盘，保持0
+    
+    print(f"[DEBUG] consec_up={consec_up}, consec_down={consec_down}, direction={'up' if found_direction==1 else 'down' if found_direction==-1 else 'flat'}")
 
     pct_5d = (latest - closes[-6]) / closes[-6] * 100 if len(closes) >= 6 else 0
     high_30d = max(highs[-30:]) if len(highs) >= 30 else max(highs)
@@ -1088,7 +1643,7 @@ def get_position_advice(position_id):
         score -= 10
         scores["volume_price"] = -10
         reasons.append(f"放量下跌（量比{vol_ratio:.1f}），主力出货信号（-10）")
-    elif vol_ratio < 0.7:
+    elif vol_ratio < 0.8:
         score -= 3
         scores["volume_price"] = -3
         reasons.append(f"缩量（量比{vol_ratio:.1f}），交投清淡（-3）")
@@ -1138,19 +1693,43 @@ def get_position_advice(position_id):
         reasons.append(f"连跌{consec_down}天，趋势偏弱（-5）")
 
 
-    # 【新增】6. 高低点结构分析
+    # 【新增】6. 高低点结构分析（统一调用 analyze_hl_points，动态n）
     hl_structure = {"structure": "unknown", "score": 0, "signal": "无法分析", "recent_highs": [], "recent_lows": []}
     try:
-        from helpers import analyze_hl_structure
-        import pandas as pd
+        from helpers import analyze_hl_points
         
-        df_hl = pd.DataFrame({
-            'high': highs,
-            'low': lows,
-            'close': closes,
-        })
-        hl_result = analyze_hl_structure(df_hl, n=5)
-        hl_structure = hl_result
+        # 动态n：根据持仓周期自适应
+        # 短线(<5天)→n=2灵敏，波段(5~20天)→n=4稳健，长线(>20天)→n=5保守
+        if buys:
+            from datetime import datetime as dt
+            earliest_buy = min(t.get("buy_date", "") for t in buys)
+            try:
+                buy_dt = dt.strptime(earliest_buy, "%Y-%m-%d")
+                hold_days = (dt.now() - buy_dt).days
+            except Exception:
+                hold_days = 0
+            
+            if hold_days <= 5:
+                hl_n = 2   # 短线：灵敏捕捉短期结构
+            elif hold_days <= 20:
+                hl_n = 4   # 波段：平衡灵敏度与可靠性
+            else:
+                hl_n = 5   # 长线：过滤噪音，关注中期方向
+        else:
+            hl_n = 4  # 默认波段级别
+        
+        hl_result = analyze_hl_points(highs=highs, lows=lows, n=hl_n)
+        hl_structure = {
+            "structure": hl_result.get("structure", "unknown"),
+            "score": hl_result.get("score", 0),
+            "signal": hl_result.get("signal", "无法分析"),
+            "high_trend": hl_result.get("high_trend", "flat"),
+            "low_trend": hl_result.get("low_trend", "flat"),
+            "recent_highs": [p[1] for p in hl_result.get("recent_highs", [])],
+            "recent_lows": [p[1] for p in hl_result.get("recent_lows", [])],
+            "_hl_n": hl_n,  # 记录实际使用的窗口参数
+            "_hold_days": hold_days if buys else None,
+        }
         
         # 根据结构调整评分
         if hl_result["structure"] == "uptrend":
@@ -1899,7 +2478,7 @@ def get_quote(ts_code):
     """获取单只股票实时行情"""
     ts_code = ts_code.upper()
     if is_trade_time():
-        quotes = get_realtime_quotes_eastmoney([ts_code])
+        quotes = get_realtime_quotes([ts_code])
     else:
         quotes = {}
         daily = get_tushare_daily(ts_code)
@@ -2012,22 +2591,28 @@ def check_three_views():
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else None
 
-        # 获取实时行情替换最新价格
+        # 强制使用新浪财经实时行情（绕过东方财富和 Tushare 降级）
+        from helpers import get_realtime_quotes_sina
         data_source = "tushare"
         realtime_price = 0.0
+        sina_success = False
         try:
-            rt_data = get_realtime_quotes([ts_code])
-            quote = rt_data.get(ts_code, {})
-            rp = quote.get("price", 0)
+            sina_data = get_realtime_quotes_sina([ts_code], use_cache=False)
+            sina_quote = sina_data.get(ts_code, {})
+            rp = sina_quote.get("price", 0)
             if rp > 0:
                 realtime_price = rp
-                data_source = quote.get("_source", "unknown")
+                data_source = "sina"
+                sina_success = True
                 closes = df["close"].tolist()
                 closes[-1] = rp
                 df.loc[df.index[-1], "close"] = rp
                 latest = df.iloc[-1]
+                print(f"[INFO] 三看确认 {ts_code} 新浪实时价: ¥{rp}")
+            else:
+                print(f"[WARN] 三看确认 {ts_code} 新浪行情返回空价格，使用 Tushare 历史价")
         except Exception as e:
-            print(f"[DEBUG] 三看确认实时行情获取失败: {e}")  # DEBUG
+            print(f"[WARN] 三看确认 {ts_code} 新浪行情获取失败: {e}，使用 Tushare 历史价")
 
         result = {
             "ts_code": ts_code,
@@ -2036,45 +2621,91 @@ def check_three_views():
             "close": round(float(latest["close"]), 3),
             "realtime_price": round(realtime_price, 3) if realtime_price > 0 else None,
             "data_source": data_source,
+            "sina_success": sina_success,
             "checks": {}
         }
 
-        # ========== 一看：高低点抬高 ==========
-        # 找最近5个波段的低点和高点（使用3日窗口确认极值，更稳健）
-        lows = []
-        highs = []
-        window = 2  # 前后各2天，共5日窗口
-        for i in range(window, len(df) - window):
-            # 低点：比前后window天都低
-            is_low = all(df.iloc[i]["low"] < df.iloc[i-j]["low"] for j in range(1, window+1)) and \
-                     all(df.iloc[i]["low"] < df.iloc[i+j]["low"] for j in range(1, window+1))
-            if is_low:
-                lows.append((i, float(df.iloc[i]["low"])))
-            # 高点：比前后window天都高
-            is_high = all(df.iloc[i]["high"] > df.iloc[i-j]["high"] for j in range(1, window+1)) and \
-                      all(df.iloc[i]["high"] > df.iloc[i+j]["high"] for j in range(1, window+1))
-            if is_high:
-                highs.append((i, float(df.iloc[i]["high"])))
-
-        # 取最近3个低点和高点
-        recent_lows = lows[-3:] if len(lows) >= 3 else lows
-        recent_highs = highs[-3:] if len(highs) >= 3 else highs
-
-        low_increasing = len(recent_lows) >= 2 and all(
-            recent_lows[i][1] > recent_lows[i-1][1] for i in range(1, len(recent_lows))
+        # ========== 一看：高低点抬高（统一调用公共函数） ==========
+        from helpers import analyze_hl_points
+        _hl_n = 2  # 三看检查用短期窗口（灵敏捕捉3~5天波段）
+        hl_result = analyze_hl_points(
+            highs=df["high"].tolist(),
+            lows=df["low"].tolist(),
+            n=_hl_n
         )
-        high_increasing = len(recent_highs) >= 2 and all(
-            recent_highs[i][1] > recent_highs[i-1][1] for i in range(1, len(recent_highs))
-        )
+
+        recent_lows = [(idx, p) for idx, p in hl_result.get("recent_lows", [])]
+        recent_highs = [(idx, p) for idx, p in hl_result.get("recent_highs", [])]
+
+        low_increasing = hl_result.get("low_trend") == "up"
+        high_increasing = hl_result.get("high_trend") == "up"
+
+        # ---- 构建用户友好的高低点描述 ----
+        _struct = hl_result.get("structure", "unknown")
+        _sig = hl_result.get("signal", "")
+        _lt = hl_result.get("low_trend", "flat")
+        _ht = hl_result.get("high_trend", "flat")
+        # n值含义说明（供用户理解分析灵敏度）
+        _window_days = _hl_n * 2 + 1  # 实际K线窗口宽度
+        _scope_label = {
+            2: "短线(n=2·5日)",
+            3: "短波(n=3·7日)",
+            4: "波段(n=4·9日)",
+            5: "趋势(n=5·11日)",
+        }.get(_hl_n, f"窗口(n={_hl_n})")
+
+        # description：结论 + 窗口信息 + 结构类型
+        if low_increasing and high_increasing:
+            desc_map = {
+                "uptrend": f"✅ 高低点抬高 [{_scope_label}] — 近期呈上升结构",
+                "weak_uptrend": f"⚡ 高低点偏高 [{_scope_label}] — 高点突破但低点待确认",
+                "bottoming": f"📐 底部构建 [{_scope_label}] — 低点已抬高，等待高点突破",
+                "sideways": f"➡️ 高低点微升 [{_scope_label}] — 震荡偏强方向待确认",
+            }
+            hl_desc = desc_map.get(_struct, f"✅ 高低点抬高 [{_scope_label}]")
+        elif low_increasing and not high_increasing:
+            hl_desc = f"🔸 仅低点抬高 [{_scope_label}] — 支撑上移但压力未突破"
+        elif not low_increasing and high_increasing:
+            hl_desc = f"⚠️ 仅高点抬高 [{_scope_label}] — 注意风险，支撑在下移"
+        else:
+            desc_map_fail = {
+                "downtrend": f"❌ 高低点下移 [{_scope_label}] — 呈下降结构，注意回避",
+                "weak_downtrend": f"🔻 高点回落 [{_scope_label}] — 趋势转弱需警惕",
+                "topping": f"📍 顶部构筑 [{_scope_label}] — 低点开始下移",
+                "sideways": f"➖ 高低点未抬 [{_scope_label}] — 方向不明",
+            }
+            hl_desc = desc_map_fail.get(_struct, f"❌ 高低点未抬高 [{_scope_label}]")
+
+        # detail：具体点位 + 趋势箭头 + n值标注
+        low_prices = [round(x[1], 2) for x in recent_lows]
+        high_prices = [round(x[1], 2) for x in recent_highs]
+        low_arrow = "↗" if _lt == "up" else ("↘" if _lt == "down" else "→")
+        high_arrow = "↗" if _ht == "up" else ("↘" if _ht == "down" else "→")
+        lt_text = {"up":"持续抬高","down":"不断下移","flat":"平稳"}[_lt]
+        ht_text = {"up":"突破向上","down":"逐步回落","flat":"持平"}[_ht]
+
+        parts = []
+        if low_prices:
+            parts.append(f"近{len(low_prices)}个低点: {' → '.join(f'{p:.2f}' for p in low_prices)} {low_arrow} {lt_text}")
+        if high_prices:
+            parts.append(f"近{len(high_prices)}个高点: {' → '.join(f'{p:.2f}' for p in high_prices)} {high_arrow} {ht_text}")
+        # 在detail末尾追加窗口说明
+        window_note = f"(分析窗口: {_window_days}日K线)"
+        hl_detail = (" | ".join(parts) + " | " + window_note) if parts else (f"{_sig} | {window_note}")
 
         result["checks"]["high_low"] = {
             "passed": bool(low_increasing and high_increasing),
             "low_increasing": bool(low_increasing),
             "high_increasing": bool(high_increasing),
-            "recent_lows": [round(x[1], 3) for x in recent_lows],
-            "recent_highs": [round(x[1], 3) for x in recent_highs],
-            "description": "高低点抬高" if (low_increasing and high_increasing) else "高低点未抬高",
-            "detail": f"最近{len(recent_lows)}个低点: {[round(x[1], 2) for x in recent_lows]} | 最近{len(recent_highs)}个高点: {[round(x[1], 2) for x in recent_highs]}"
+            "recent_lows": low_prices,
+            "recent_highs": high_prices,
+            "description": hl_desc,
+            "detail": hl_detail,
+            "_hl_structure": _struct,
+            "_hl_score": hl_result.get("score", 0),
+            "_hl_signal": _sig,
+            "_hl_n": _hl_n,           # 窗口参数（前端可按此做差异化展示）
+            "_hl_window_days": _window_days,  # 实际K线窗口天数
         }
 
         # ========== 二看：均线多头排列 ==========
@@ -2105,23 +2736,138 @@ def check_three_views():
         up_vol = up_days["vol"].mean() if len(up_days) > 0 else 0
         down_vol = down_days["vol"].mean() if len(down_days) > 0 else 0
 
-        vol_ok = vol_ratio > 1.0 and up_vol > down_vol
+        # 计算当日涨跌幅
+        pct_1d = (latest["close"] - prev["close"]) / prev["close"] * 100 if prev is not None else 0
+        
+        vol_ok = vol_ratio > 0.8 and up_vol > down_vol
+        
+        # 交互体验优化：多层级描述系统（颜色+图标+自然语言）
+        # 第一层：信号分类（用于快速识别）
+        # 1. 危险信号：放量下跌（主力出货）
+        if vol_ratio > 1.3 and pct_1d < -0.5:
+            signal = "danger"
+            icon = "📉"
+            short_desc = "放量下跌，警惕出货"
+            color = "#ef4444"  # 红色
+            advice = "主力出货信号，建议减仓或止损"
+            explanation = f"成交量比5日均量高出{((vol_ratio-1)*100):.0f}%，但价格下跌{pct_1d:.1f}%，表明抛压沉重，可能有主力出货"
+            action_level = "high"
+            suggested_action = "减仓30-50%或设置止损"
+            vol_interpretation = "非常活跃"
+            price_trend = "下跌"
+            # 覆盖vol_ok：放量下跌无论量能结构如何都危险
+            vol_ok = False
+        # 2. 强势信号：极度放量且上涨量能显著占优
+        elif vol_ratio > 1.5 and up_vol > down_vol * 1.5:
+            signal = "strong"
+            icon = "🔥"
+            short_desc = "成交极度活跃，量价齐升"
+            color = "#22c55e"  # 绿色
+            advice = "量价配合极佳，动能强劲，可持有或加仓"
+            explanation = f"成交量比5日均量高出{((vol_ratio-1)*100):.0f}%，上涨日成交量是下跌日的{up_vol/down_vol:.1f}倍，量价齐升，上涨动能强劲"
+            action_level = "low"
+            suggested_action = "可持有或小幅加仓，关注持续性"
+            vol_interpretation = "非常活跃"
+            price_trend = "上涨"
+        # 3. 良好信号：放量且上涨量能占优
+        elif vol_ratio > 1.2 and up_vol > down_vol:
+            signal = "good"
+            icon = "📈"
+            short_desc = "成交活跃，上涨有量支撑"
+            color = "#3b82f6"  # 蓝色
+            advice = "量价配合良好，趋势健康，可继续持有"
+            explanation = f"成交量比5日均量高出{((vol_ratio-1)*100):.0f}%，上涨日成交量是下跌日的{up_vol/down_vol:.1f}倍，量价配合良好"
+            action_level = "none"
+            suggested_action = "维持当前仓位，趋势向好可继续持有"
+            vol_interpretation = "活跃"
+            price_trend = "上涨"
+        # 4. 正常信号：量比正常且上涨量能占优（通过）
+        elif vol_ratio >= 0.8 and up_vol > down_vol:
+            signal = "normal"
+            icon = "📊"
+            short_desc = "成交量正常，上涨量能充足"
+            color = "#6b7280"  # 中灰色
+            advice = "成交量稳定，上涨有量支撑，维持当前仓位"
+            explanation = f"成交量与5日均量基本持平（量比{vol_ratio:.1f}），上涨日成交量是下跌日的{up_vol/down_vol:.1f}倍，量价配合正常"
+            action_level = "none"
+            suggested_action = "维持当前仓位，按原计划操作"
+            vol_interpretation = "正常"
+            price_trend = "震荡"
+        # 5. 不足信号：量比正常但上涨量能不足（不通过）
+        elif vol_ratio >= 0.8 and up_vol <= down_vol:
+            signal = "weak"
+            icon = "⚪"
+            short_desc = "成交量正常但上涨量能不足"
+            color = "#94a3b8"  # 灰色
+            advice = "成交量稳定但上涨缺乏量能支撑，建议观望"
+            explanation = f"成交量与5日均量基本持平（量比{vol_ratio:.1f}），但上涨日成交量仅为下跌日的{up_vol/down_vol:.1f}倍，上涨缺乏量能支撑"
+            action_level = "medium"
+            suggested_action = "观望，等待放量确认方向"
+            vol_interpretation = "正常"
+            price_trend = "震荡"
+        # 6. 清淡信号：量比过低（不通过）
+        else:  # vol_ratio < 0.8
+            signal = "weak"
+            icon = "⚪"
+            short_desc = "成交清淡，缺乏动能"
+            color = "#94a3b8"  # 灰色
+            advice = "交投清淡，市场关注度低，观望等待放量信号"
+            explanation = f"成交量比5日均量低{((1-vol_ratio)*100):.0f}%，市场关注度下降，缺乏明确方向"
+            action_level = "medium"
+            suggested_action = "观望，等待放量确认方向"
+            vol_interpretation = "清淡"
+            price_trend = "震荡"
 
+        # 第二层：详细数据说明（用于深入分析）
+        vol_ratio_label = ""
+        if vol_ratio > 1.5:
+            vol_ratio_label = f"非常活跃（比平时高{((vol_ratio-1)*100):.0f}%）"
+        elif vol_ratio > 1.2:
+            vol_ratio_label = f"活跃（比平时高{((vol_ratio-1)*100):.0f}%）"
+        elif vol_ratio < 0.8:
+            vol_ratio_label = f"清淡（比平时低{((1-vol_ratio)*100):.0f}%）"
+        else:
+            vol_ratio_label = "正常范围"
+
+        # 第三层：多维度数据（用于前端可视化）
+        up_down_ratio = up_vol / down_vol if down_vol > 0 else 0
+        volume_status = "favorable" if up_vol > down_vol else "unfavorable"
+        strength_score = min(100, int(vol_ratio * 30))  # 简单强度评分
+        
         result["checks"]["volume"] = {
+            # 基础判断
             "passed": bool(vol_ok),
-            "vol_ratio": round(float(vol_ratio), 2),
-            "today_vol": round(today_vol, 0),
-            "vol_ma5": round(float(vol_ma5), 0),
-            "up_vol_avg": round(float(up_vol), 0),
-            "down_vol_avg": round(float(down_vol), 0),
-            "description": "量价配合良好" if vol_ok else "量价配合不佳",
-            "vol_ratio_detail": round(float(vol_ratio), 2),
-            "today_vol": round(today_vol, 0),
-            "vol_ma5": round(float(vol_ma5), 0),
-            "up_down_ratio": round(float(up_vol / down_vol), 2) if down_vol > 0 else 0,
-            "up_vol_avg": round(float(up_vol), 0),
-            "down_vol_avg": round(float(down_vol), 0),
-            "detail": f"量比={vol_ratio:.2f}（当日/5日均），上涨日均量/下跌日均量={up_vol/down_vol:.2f}（最近10个交易日）"
+            "description": short_desc,
+            
+            # 交互体验增强字段
+            "signal": signal,          # danger/strong/good/weak/normal
+            "icon": icon,              # 表情图标
+            "color": color,            # 颜色编码
+            "advice": advice,          # 操作建议
+            
+            # 详细数据层（用于前端展示）
+            "indicators": {
+                "vol_ratio": round(float(vol_ratio), 2),
+                "vol_ratio_label": vol_ratio_label,
+                "today_vol": round(today_vol, 0),
+                "vol_ma5": round(float(vol_ma5), 0),
+                "up_vol_avg": round(float(up_vol), 0),
+                "down_vol_avg": round(float(down_vol), 0),
+                "up_down_ratio": round(float(up_down_ratio), 2),
+                "pct_chg": round(pct_1d, 2),
+                "volume_status": volume_status,
+                "strength_score": strength_score,
+            },
+            
+            # 新增解释性字段（P0优化）
+            "explanation": explanation,
+            "action_level": action_level,
+            "suggested_action": suggested_action,
+            "vol_interpretation": vol_interpretation,
+            "price_trend": price_trend,
+            
+            # 详细描述（自然语言）
+            "detail": f"{icon} 今日成交量{round(today_vol/10000, 1)}万手，比5日均量{('高' if vol_ratio > 1 else '低')}{abs((vol_ratio-1)*100):.0f}%。上涨日平均成交{round(up_vol/10000, 1)}万手，是下跌日{round(up_down_ratio, 1)}倍。{advice}"
         }
 
         # 综合结论
@@ -2137,6 +2883,15 @@ def check_three_views():
                 "满足2项，可小仓位试探" if passed_count >= 2 else "条件不满足，建议等待"
             )
         }
+
+        # [P1-6] 买入价格锚点 — 复用已有K线数据，不增加额外请求
+        try:
+            from helpers import calc_buy_price_anchors
+            _rp_for_buy = realtime_price if realtime_price > 0 else float(latest["close"])
+            result["buy_price_anchors"] = calc_buy_price_anchors(df, latest_realtime=_rp_for_buy)
+        except Exception as _bpa_e:
+            print(f"[WARN] 买入价格锚点计算失败: {_bpa_e}")
+            result["buy_price_anchors"] = None
 
         return jsonify(result)
 

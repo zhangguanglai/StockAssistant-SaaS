@@ -13,7 +13,7 @@ from database import (
     remove_watch_item, clear_watch_list as db_clear_watch,
 )
 from helpers import (
-    pro, get_realtime_quote, get_realtime_quotes_eastmoney,
+    pro, get_realtime_quote, get_realtime_quotes,
     get_stock_info, get_index_quotes,
 )
 
@@ -48,30 +48,33 @@ def get_watch_list():
     if not items:
         return jsonify({"items": [], "count": 0})
 
+    # ★ 性能优化：批量获取行情（N次HTTP → 1次），参考 enrich_positions() 模式
+    codes = [item["ts_code"] for item in items]
+    batch_quotes = get_realtime_quotes(codes) if codes else {}
+
     enriched = []
     for item in items:
         ts_code = item["ts_code"]
-        try:
-            quote = get_realtime_quote(ts_code)
-            if quote:
-                item["current_price"] = quote.get("price", item.get("add_price", 0))
-                item["current_pct_chg"] = quote.get("pct_chg", 0)
-                add_price = item.get("add_price", 0)
-                if add_price and add_price > 0:
-                    chg = (quote.get("price", 0) - add_price) / add_price * 100
-                    item["track_chg_pct"] = round(chg, 2)
-        except Exception:
-            pass
+        quote = batch_quotes.get(ts_code, {})
+        if quote:
+            item["current_price"] = quote.get("price", item.get("add_price", 0))
+            item["current_pct_chg"] = quote.get("pct_chg", 0)
+            add_price = item.get("add_price", 0)
+            if add_price and add_price > 0:
+                chg = (quote.get("price", 0) - add_price) / add_price * 100
+                item["track_chg_pct"] = round(chg, 2)
+        else:
+            item.setdefault("current_price", item.get("add_price", 0))
+            item.setdefault("current_pct_chg", 0)
         enriched.append(item)
 
     # 排序：添加日期(新→旧) → 评分(高→低) → 跟踪收益(高→低)
-    # 日期用字符串降序（YYYY-MM-DD格式天然可比较）
     enriched.sort(key=lambda x: (
-        x.get("add_date") or "",          # 日期升序
-        x.get("add_score", 0) or 0,       # 分数升序  
-        x.get("track_chg_pct", 0) or 0,   # 收益升序
+        x.get("add_date") or "",
+        x.get("add_score", 0) or 0,
+        x.get("track_chg_pct", 0) or 0,
     ), reverse=True)
-    
+
     return jsonify({"items": enriched, "count": len(enriched)})
 
 
@@ -99,6 +102,7 @@ def add_to_watch_list():
         tag=body.get("tag", ""),
         note=body.get("note", ""),
         user_id=user_id,
+        match_audit=body.get("match_audit"),  # v3.6: 存储选股审计轨迹
     )
 
     count = len(get_watch_list_items(user_id))
@@ -129,6 +133,7 @@ def batch_add_watch_list():
                 add_score=s.get("total_score", 0),
                 tag=s.get("tag", ""),
                 user_id=user_id,
+                match_audit=s.get("match_audit"),  # v3.6: 存储选股审计轨迹
             )
             existing.add(ts_code)
             added += 1
@@ -384,7 +389,7 @@ def get_watch_advice(ts_code):
     elif vol_ratio > 1.5 and pct_5d < 0:
         score -= 10
         reasons.append(f"放量下跌（量比{vol_ratio:.1f}），主力出货（-10）")
-    elif vol_ratio < 0.7:
+    elif vol_ratio < 0.8:
         score -= 3
         reasons.append(f"缩量（量比{vol_ratio:.1f}），交投清淡（-3）")
     else:
@@ -711,7 +716,7 @@ def strategy_performance():
 
     all_codes = [item["ts_code"] for item in items]
     try:
-        all_quotes = get_realtime_quotes_eastmoney(all_codes)
+        all_quotes = get_realtime_quotes(all_codes)
     except Exception:
         all_quotes = {}
 
@@ -891,7 +896,7 @@ def compare_stocks():
         }
 
         try:
-            quotes = get_realtime_quotes_eastmoney([code])
+            quotes = get_realtime_quotes([code])
             if code in quotes:
                 q = quotes[code]
                 stock_info["price"] = q.get("price", 0)
