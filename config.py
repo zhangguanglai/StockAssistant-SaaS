@@ -29,9 +29,10 @@ HOST = "127.0.0.1"
 PORT = 5000
 DEBUG = os.environ.get("FLASK_DEBUG", "1") == "1"
 
-# 数据目录
-DATA_DIR = "data"
-PORTFOLIO_FILE = "data/portfolio.json"
+# 数据目录（支持 Railway Volume 持久化：设置环境变量 VOLUME_PATH 即可）
+_VOLUME_DIR = os.environ.get("VOLUME_PATH")
+DATA_DIR = _VOLUME_DIR if _VOLUME_DIR else "data"
+PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.json")
 
 # 行情刷新间隔（秒）
 REFRESH_INTERVAL = 10

@@ -10,7 +10,9 @@ from datetime import datetime
 from contextlib import contextmanager
 
 # 数据库文件路径（与 JSON 数据同目录）
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# 优先使用环境变量 VOLUME_PATH（用于 Railway 等云平台的持久卷挂载）
+_DATA_DIR_ENV = os.environ.get("VOLUME_PATH")
+DATA_DIR = _DATA_DIR_ENV if _DATA_DIR_ENV else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 DB_FILE = os.path.join(DATA_DIR, "portfolio.db")
 
 # 全局连接管理

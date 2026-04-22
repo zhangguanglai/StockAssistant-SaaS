@@ -84,6 +84,13 @@ if __name__ == "__main__":
     # 确保数据目录存在
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # 显示存储模式（本地 / Railway Volume）
+    _volume_path = os.environ.get("VOLUME_PATH")
+    if _volume_path:
+        print(f"[INFO] 🗄️  持久卷已挂载: {os.path.abspath(DATA_DIR)}")
+    else:
+        print(f"[INFO] 📁 本地存储模式: {os.path.abspath(DATA_DIR)}")
+
     # JSON → SQLite 迁移（如果需要）
     migrate_from_json()
 
