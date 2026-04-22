@@ -944,6 +944,11 @@ tbody td{padding:var(--space-md) var(--space-lg);font-size:var(--font-base);whit
 .strategy-tags{display:flex;flex-wrap:wrap;gap:10px}
 .strategy-tags .tag{display:inline-flex;align-items:center;gap:6px;font-size:var(--font-xs);padding:6px 14px;background:var(--bg-secondary);border-radius:20px;color:var(--text-secondary);font-weight:500}
 .strategy-tags .tag-icon{font-size:var(--font-xs)}
+/* 收起状态：标签更紧凑 */
+.strategy-collapsed .tag{font-size:11px;padding:5px 12px}
+/* 展开/收起按钮 */
+.details-toggle-btn{width:100%;margin-top:10px;padding:6px 16px;background:transparent;border:1px dashed var(--border);border-radius:var(--radius-sm);color:var(--text-muted);font-size:11px;cursor:pointer;transition:all .2s;text-align:center}
+.details-toggle-btn:hover{color:var(--blue);border-color:var(--blue);background:var(--blue-bg)}
 
 /* ====== 策略执行摘要区 ====== */
 .strategy-exec-summary{margin-top:var(--space-md);padding-top:var(--space-md);border-top:1px solid var(--border)}

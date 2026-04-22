@@ -308,14 +308,17 @@ setup(){
     const strategySummaries=ref({});
     // 正在运行的策略列表
     const runningStrategies=ref([]);
-    // 默认策略列表 - 使用普通对象确保模板始终可以访问
+    // 策略详情展开状态（keyed by strategy name，默认全部收起）
+    const expandedDetails=ref({});
+    function toggleDetails(key){expandedDetails.value[key]=!expandedDetails.value[key]}
     const DEFAULT_STRATEGIES = {
         'trend_break': {
             name: '趋势突破', icon: '📈', suitable: '大盘上升/震荡期',
             description: '买入信号：①趋势面(~37分)MA20位置(5)+方向(4)+HL结构(4)+MACD状态(0~12)+均线多头(0~10)；②板块(15分)相对超额收益+概念热度排名；③资金(10分)主力净流入+大单结构+持续性；④共振(15分)三看共振(全过15/二看9/一看5)；⑤催化(10分)业绩预告/回购/涨停/缩量回踩'
         },
         'sector_leader': { name: '板块龙头', icon: '🏆', suitable: '短期热点追踪' },
-        'oversold_bounce': { name: '超跌反弹', icon: '📉', suitable: '抄底机会捕捉' }
+        'oversold_bounce': { name: '超跌反弹', icon: '📉', suitable: '抄底机会捕捉',
+            description: '①趋势(35分)跌幅分级+止跌信号(长下影/放量阳/MACD金叉)；②板块(15/5)热门概念匹配；③资金(15分)净流入+连续天数+占比；④加分(15)市值区间+业绩预告+回购；⑤技术改善(15)MA金叉+显著放量+阳线；⑥HL结构(-5~10)' }
     };
     const strategyList=ref({...DEFAULT_STRATEGIES});
     // 使用普通对象作为安全访问层，避免 computed 在初始化时的 undefined 问题
@@ -1034,16 +1037,22 @@ setup(){
             preview.push({text:'二值判断：板块第1名=龙头，其余=观察',highlight:true});
         }else if(strategy==='oversold_bounce'){
             const dropThr=Math.abs(pv('min_drop_pct',20));
-            const mvMin=pv('min_circ_mv',50);
+            const mvMin=pv('min_circ_mv',100);
+            const mvMax=pv('max_circ_mv',0);
             const techMin=pv('tech_confirm_min',1);
             const volThr=pv('vol_ratio_threshold',1.3);
             const shadowThr=pv('lower_shadow_pct',1.5);
-            preview.push({text:`近20日跌幅 > ${dropThr}%（深度回调）`,highlight:dropThr>=15});
-            preview.push({text:`流通市值 ${mvMin}-${pv('max_circ_mv',300)}亿（防闪崩）`,highlight:mvMin>=30});
-            preview.push({text:'止跌信号：长下影线(>'+shadowThr+'%) / 放量('+volThr+'倍以上) / MACD金叉',highlight:true});
-            preview.push({text:`技术改善信号(MA金叉/阳线/放量)：需${techMin>0?'至少'+techMin+'个':'不强制'}`,highlight:techMin>=1});
-            preview.push({text:'HL结构：低点抬高=反弹就绪 / 初步企稳=观望',highlight:true});
-            preview.push({text:'加分：业绩预增扭亏/大额回购(+2)',highlight:false});
+            // 过滤门禁
+            preview.push({text:`🔒 过滤：非ST + 上市≥90天 + 跌幅>${dropThr}% + 市值≥${mvMin}亿${mvMax>0?' ≤'+mvMax+'亿':'(不限)'}`,highlight:true});
+            // 止跌信号（3选1+即可）
+            preview.push({text:`🛑 止跌信号：长下影线>${shadowThr}% / 放量阳线>1%(${volThr}倍量比) / MACD底部金叉`,highlight:true});
+            // 技术改善（3选N）
+            preview.push({text:`⚡ 技术改善：MA5上穿MA20金叉 + 显著放量≥${Math.max(volThr*1.5,2).toFixed(1)}倍 + 阳线>0.5%`,highlight:techMin>=1});
+            if(techMin>=1)preview.push({text:`   → 要求至少${techMin}个技术改善信号`,highlight:false});
+            // HL结构
+            preview.push({text:`📊 HL结构：低点抬高=反弹就绪(+10) / 继续创新低=-5⚠️`,highlight:false});
+            // 评分维度
+            preview.push({text:`📐 评分：趋势(35) + 板块(15/5) + 资金(15) + 加分(15) + 技术(15) + HL(-5~10) = 满分100`,highlight:true});
         }
         return preview;
     });
@@ -1977,7 +1986,7 @@ setup(){
         positions,summary,loading,searchKeyword,sortKey,sortDir,activeTab,indexData,indexSource,indexTime,tradeLogs,tradeLogStats,capitalForm,strategyData,
         screenMarket,screenStats,screenResults,screenHistory,screenInfo,screenBonusTags,getScreenPreview,
         allScreenResults,strategySummaries,runningStrategies,getStrategySummary,
-        currentStrategy,strategyList,strategyListSafe,currentStrategyMeta,screenStrategyReason,screenStrategyRecommended,strategyBacktestData,
+        currentStrategy,strategyList,strategyListSafe,currentStrategyMeta,screenStrategyReason,screenStrategyRecommended,strategyBacktestData,expandedDetails,toggleDetails,
         viewStrategyResult,selectAndRun,loadAllStrategySummaries,
         showAddModal,showSellModal,showDetailModal,showAlertModal,showImportModal,showParamsModal,showAdviceModal,showHeaderMenu,showTradeDetailModal,editingPosition,detailPosition,sellTarget,alertTarget,adviceTarget,tradeDetailTarget,
         emotionLabels,volumePriceHelper,addForm,sellForm,alertForm,addError,sellError,submitting,submittingSell,searchResults,importData,importMode,importError,

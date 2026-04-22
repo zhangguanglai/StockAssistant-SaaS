@@ -296,25 +296,56 @@
                         <span v-if="currentStrategy===key">✓</span>
                     </div>
                 </div>
-                <!-- 展开详情 -->
-                <div v-if="currentStrategy===key" class="strategy-details">
-                    <div class="strategy-tags">
-                        <template v-if="key==='trend_break'">
-                            <span class="tag"><span class="tag-icon">📌</span>买入信号：①趋势面(~37分)MA20位置(5)+方向(4)+HL结构(4)+MACD状态(0~12)+均线多头(0~10)；②板块(15分)相对超额收益+概念热度排名；③资金(10分)主力净流入+大单结构+持续性；④共振(15分)三看共振(全过15/二看9/一看5)；⑤催化(10分)业绩预告/回购/涨停/缩量回踩</span>
-                            <span class="tag"><span class="tag-icon">⏱️</span>持股周期：3-10个交易日</span>
-                            <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破MA20或亏损8%</span>
-                        </template>
-                        <template v-else-if="key==='sector_leader'">
-                            <span class="tag"><span class="tag-icon">📌</span>极简逻辑：板块Top5 x 个股Top5；二值判断：龙头或观察</span>
-                            <span class="tag"><span class="tag-icon">⏱️</span>持股周期：1-3个交易日</span>
-                            <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破板块平均涨幅或亏损5%</span>
-                        </template>
-                        <template v-else-if="key==='oversold_bounce'">
-                            <span class="tag"><span class="tag-icon">📌</span>买入信号：①趋势(35分)跌幅分级(<-50=20/~-40=17/~-30=13/~-25=10/-20~=-7)+三重止跌信号(3/2/1)；②板块(15/5分)命中热门概念=15否则=5；③资金(15分)净流入(+10)+连续≥3天(+5)+占比>1%(+5)；④加分(15分)市值区间(10)+业绩预增(+3)+回购>1亿(+2)；⑤技术改善(15分)MA5上穿MA20+显著放量(量比≥2.0)+阳线(>0.5%)；⑥HL结构(-5~10)低点抬高=+10/创新低=-5</span>
-                            <span class="tag"><span class="tag-icon">⏱️</span>持股周期：5-20个交易日</span>
-                            <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破近期新低或亏损10%</span>
-                        </template>
-                    </div>
+                <!-- 展开详情（可折叠） -->
+                <div class="strategy-details" v-if="currentStrategy===key">
+                    <!-- 收起状态：只显示核心摘要 -->
+                    <template v-if="!expandedDetails[key]">
+                        <div class="strategy-tags strategy-collapsed">
+                            <template v-if="key==='trend_break'">
+                                <span class="tag"><span class="tag-icon">📌</span>趋势面(~37分) + MACD + 均线多头</span>
+                                <span class="tag"><span class="tag-icon">🔥</span>板块(15) + 资金(10) + 共振(15) + 催化(10)</span>
+                            </template>
+                            <template v-else-if="key==='sector_leader'">
+                                <span class="tag"><span class="tag-icon">📌</span>板块Top5 × 个股Top5 = 龙头或观察</span>
+                                <span class="tag"><span class="tag-icon">⏱️</span>持股1-3日 / 止损亏损5%</span>
+                            </template>
+                            <template v-else-if="key==='oversold_bounce'">
+                                <span class="tag"><span class="tag-icon">📌</span>趋势(35)：跌幅分级 + 止跌信号(长下影/放量阳/MACD金叉)</span>
+                                <span class="tag"><span class="tag-icon">💰</span>板块(15/5) + 资金(15) + 加分(15) + 技术(15) + HL(-5~10)</span>
+                            </template>
+                        </div>
+                    </template>
+                    <!-- 展开状态：显示全部细节 -->
+                    <template v-else>
+                        <div class="strategy-tags">
+                            <template v-if="key==='trend_break'">
+                                <span class="tag"><span class="tag-icon">📌</span>买入信号：①趋势面(~37分)MA20位置(5)+方向(4)+HL结构(4)+MACD状态(0~12)+均线多头(0~10)；②板块(15分)相对超额收益+概念热度排名；③资金(10分)主力净流入+大单结构+持续性；④共振(15分)三看共振(全过15/二看9/一看5)；⑤催化(10分)业绩预告/回购/涨停/缩量回踩</span>
+                                <span class="tag"><span class="tag-icon">⏱️</span>持股周期：3-10个交易日</span>
+                                <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破MA20或亏损8%</span>
+                            </template>
+                            <template v-else-if="key==='sector_leader'">
+                                <span class="tag"><span class="tag-icon">📌</span>极简逻辑：板块Top5 x 个股Top5；二值判断：龙头或观察</span>
+                                <span class="tag"><span class="tag-icon">⏱️</span>持股周期：1-3个交易日</span>
+                                <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破板块平均涨幅或亏损5%</span>
+                            </template>
+                            <template v-else-if="key==='oversold_bounce'">
+                                <span class="tag"><span class="tag-icon">📌</span>趋势(35分)：跌幅分级 &lt;-50=20 / -50~-40=17 / -40~-30=13 / -30~-25=10 / -25~-20=7</span>
+                                <span class="tag"><span class="tag-icon">📌</span>止跌信号(最高15分)：长下影线+放量阳线+MACD金叉（三重=15/双=12/单=8）</span>
+                                <span class="tag"><span class="tag-icon">🔥</span>板块效应(15分或5分)：命中热门概念Top15=15，未命中=5保底</span>
+                                <span class="tag"><span class="tag-icon">💰</span>资金面(15分)：净流入&gt;0(+10) + 连续≥3天(+5) + 占比&gt;1%(+5)</span>
+                                <span class="tag"><span class="tag-icon">🎁</span>加分项(15分)：市值区间(+10) + 业绩预增(+3) + 大额回购&gt;1亿(+2)</span>
+                                <span class="tag"><span class="tag-icon">⚡</span>技术改善(15分)：MA5上穿MA20 + 量比≥2.0 + 阳线&gt;0.5%（三全=15/双=10/单=6）</span>
+                                <span class="tag"><span class="tag-icon">📊</span>HL结构(-5~+10)：低点抬高=反弹信号(+10) / 继续创新低=-5 ⚠️</span>
+                                <span class="tag"><span class="tag-icon">⚠️</span>过滤条件：非ST + 上市≥90天 + 近20日跌幅达标 + 市值范围 + 止跌信号≥1个</span>
+                                <span class="tag"><span class="tag-icon">⏱️</span>持股周期：5-20个交易日</span>
+                                <span class="tag"><span class="tag-icon">🛡️</span>止损位：跌破近期新低或亏损10%</span>
+                            </template>
+                        </div>
+                    </template>
+                    <!-- 展开/收起按钮 -->
+                    <button class="details-toggle-btn" @click.stop="toggleDetails(key)">
+                        {{ expandedDetails[key] ? '▲ 收起规则详情' : '▼ 展开完整量化规则' }}
+                    </button>
                 </div>
                 <!-- 执行摘要区（始终可见） -->
                 <div v-if="getStrategySummary(key)" class="strategy-exec-summary">

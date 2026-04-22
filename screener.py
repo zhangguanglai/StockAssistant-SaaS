@@ -2073,12 +2073,15 @@ def hlStructureLabelCN(val):
 
 
 def format_wan(val):
-    """将金额格式化为万/亿单位"""
-    if val is None: return '0'
+    """将金额格式化为万/亿单位（输入：元，输出：万/亿）"""
+    if val is None: return '—'
     abs_v = abs(val)
-    if abs_v >= 10000:
-        return f"{val/10000:.2f}亿"
-    return f"{val/10000:.0f}万" if abs_v >= 1 else f"{val:.0f}"
+    if abs_v >= 100000000:  # ≥1亿
+        return f"{val/100000000:.2f}亿"
+    elif abs_v >= 10000:  # ≥1万
+        return f"{val/10000:.1f}万"
+    else:
+        return f"{val:.0f}"
 
 
 def _drop_score_rule(pct):
@@ -2556,16 +2559,16 @@ STRATEGY_PARAMS = {
         {
             "key": "min_circ_mv",
             "label": "最小流通市值(亿)",
-            "value": 50,
-            "min": 10, "max": 200, "step": 10,
+            "value": 100,
+            "min": 100, "max": 500, "step": 10,
             "desc": "流通市值下限，过小流动性差",
         },
         {
             "key": "max_circ_mv",
             "label": "最大流通市值(亿)",
-            "value": 300,
-            "min": 100, "max": 1000, "step": 50,
-            "desc": "流通市值上限，过大弹性不足",
+            "value": 0,
+            "min": 0, "max": 5000, "step": 100,
+            "desc": "流通市值上限，0表示不限制",
         },
         {
             "key": "lower_shadow_pct",
@@ -2883,8 +2886,8 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
 
     # 解析用户自定义参数
     p_min_drop_pct = _parse_params(params, "min_drop_pct", -20)
-    p_min_circ_mv = _parse_params(params, "min_circ_mv", 50)
-    p_max_circ_mv = _parse_params(params, "max_circ_mv", 300)
+    p_min_circ_mv = _parse_params(params, "min_circ_mv", 100)
+    p_max_circ_mv = _parse_params(params, "max_circ_mv", 0)   # 0=不限制
     p_lower_shadow_pct = _parse_params(params, "lower_shadow_pct", 1.5)
     p_body_range_pct = _parse_params(params, "body_range_pct", 3)
     p_vol_ratio_threshold = _parse_params(params, "vol_ratio_threshold", 1.3)
@@ -2916,10 +2919,11 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
         if batch_basic_df is not None and not batch_basic_df.empty:
             if not silent:
                 print(f"  → 获取 {len(batch_basic_df)} 条基本面记录")
-            # 预过滤：只保留市值达标的股票
+            # 预过滤：只保留市值达标的股票（max_circ_mv=0 表示不限制上限）
+            _mv_upper = p_max_circ_mv * 10000 if p_max_circ_mv > 0 else float('inf')
             large_caps = batch_basic_df[
                 (batch_basic_df["circ_mv"] >= p_min_circ_mv * 10000) &
-                (batch_basic_df["circ_mv"] <= p_max_circ_mv * 10000)
+                (batch_basic_df["circ_mv"] <= _mv_upper)
             ]
             large_cap_set = set(large_caps["ts_code"].tolist())
             if not silent:
@@ -3024,8 +3028,9 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
                 continue
             circ_mv = basics[-1].get("circ_mv", 0)
 
-        # 核心条件2：流通市值达标
-        if circ_mv < p_min_circ_mv * 10000 or circ_mv > p_max_circ_mv * 10000:
+        # 核心条件2：流通市值达标（max_circ_mv=0 表示不限制上限）
+        _mv_upper = p_max_circ_mv * 10000 if p_max_circ_mv > 0 else float('inf')
+        if circ_mv < p_min_circ_mv * 10000 or circ_mv > _mv_upper:
             continue
 
         # 核心条件3：近2日出现止跌信号
@@ -3415,8 +3420,8 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
                 "score": bonus_score, "cap": 15,
                 "items": [
                     {"label": "市值区间", "raw": f"{round(circ_mv_yi,1)}亿",
-                     "score": 10 if 100<=circ_mv_yi<=300 else (5 if circ_mv_yi<=500 else 2),
-                     "rule": "100~300=10 / <=500=5 / >500=2"},
+                     "score": 10 if _bonus_mv_min/10000 <= circ_mv <= _bonus_mv_mid else (5 if circ_mv <= max(_bonus_mv_mid*2, 500*10000) else 2),
+                     "rule": f"[{p_min_circ_mv},{p_max_circ_mv}]亿=10 / ≤{max(p_max_circ_mv*2,500) if p_max_circ_mv>0 else 500}=5 / 其他=2"},
                     {"label": "业绩预告", "raw": _fc_type_str,
                      "score": _fc_score_val,
                      "rule": "预增/扭亏/略增=+3"},
