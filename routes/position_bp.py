@@ -16,7 +16,7 @@ from database import (
     get_all_positions, get_position, get_position_by_code,
     create_position, update_position as db_update_position, delete_position as db_delete_position,
     get_trades, add_trade as db_add_trade, delete_trade as db_delete_trade,
-    get_all_trades, get_trade_stats,
+    get_all_trades, get_trade_stats, get_trades_by_ts_code,
 )
 from helpers import (
     pro, is_trade_time, should_use_realtime_source, enrich_positions, calc_position_meta,
@@ -1878,15 +1878,17 @@ def get_position_advice(position_id):
 @position_bp.route("/api/kline/<ts_code>")
 @login_required
 def get_kline_data(ts_code):
-    """获取个股日K线数据（最近60日），支持前复权"""
+    """获取个股日K线数据（最近120日），支持前复权，扩展均线体系"""
     try:
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=120)).strftime("%Y%m%d")
+        # MA250需要至少250个交易日数据，取400个自然日覆盖
+        start_date = (datetime.now() - timedelta(days=400)).strftime("%Y%m%d")
 
         # 获取日K线数据
         df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
         if df.empty:
-            return jsonify({"dates": [], "klines": [], "ma5": [], "ma20": [], "volumes": []})
+            return jsonify({"dates": [], "klines": [], "ma5": [], "ma10": [], "ma20": [],
+                            "ma60": [], "ma120": [], "ma250": [], "volumes": []})
         df = df.sort_values("trade_date")
 
         # 获取复权因子并做前复权
@@ -1899,23 +1901,95 @@ def get_kline_data(ts_code):
         closes = df["close"].tolist()
         volumes = df["vol"].tolist()
 
-        # 计算MA5和MA20（使用pandas rolling计算更准确）
+        # 计算多周期均线（使用pandas rolling计算）
         import pandas as pd
         df_temp = pd.DataFrame({'close': closes})
-        ma5_list = df_temp['close'].rolling(window=5, min_periods=1).mean().round(3).tolist()
-        ma20_list = df_temp['close'].rolling(window=20, min_periods=1).mean().round(3).tolist()
-        # 前4个MA5和前19个MA20设为None（数据不足）
-        ma5 = [None] * 4 + ma5_list[4:] if len(ma5_list) > 4 else ma5_list
-        ma20 = [None] * 19 + ma20_list[19:] if len(ma20_list) > 19 else ma20_list
+
+        def calc_ma(window):
+            raw = df_temp['close'].rolling(window=window, min_periods=1).mean().round(3).tolist()
+            # 前window-1个设为None，表示数据不足
+            return [None] * (window - 1) + raw[window - 1:] if len(raw) >= window else [None] * len(raw)
+
+        ma5 = calc_ma(5)
+        ma10 = calc_ma(10)
+        ma20 = calc_ma(20)
+        ma60 = calc_ma(60)
+        ma120 = calc_ma(120)
+        ma250 = calc_ma(250)
+
+        # 补充当日K线（盘中Tushare未更新时，用实时行情合成）
+        today_str = datetime.now().strftime("%Y%m%d")
+        if not dates or dates[-1] != today_str:
+            rt = get_realtime_quote(ts_code)
+            if rt and rt.get("price"):
+                try:
+                    pre_close = float(rt.get("pre_close", closes[-1] if closes else rt["price"]))
+                    today_open = float(rt.get("open", pre_close))
+                    today_close = float(rt["price"])
+                    today_high = float(rt.get("high", max(today_open, today_close)))
+                    today_low = float(rt.get("low", min(today_open, today_close)))
+                    today_vol = int(rt.get("vol", 0))
+
+                    dates.append(today_str)
+                    klines.append([round(today_open, 3), round(today_close, 3),
+                                   round(today_low, 3), round(today_high, 3)])
+                    volumes.append(today_vol)
+                    closes.append(today_close)
+                    # 均线追加近似值（当日均线 ≈ 前一日值，盘中数据不完整属正常）
+                    for ma_list in (ma5, ma10, ma20, ma60, ma120, ma250):
+                        ma_list.append(ma_list[-1] if ma_list and ma_list[-1] is not None else None)
+                except Exception:
+                    pass  # 实时行情解析失败则忽略
+
+        # 只返回最近120个交易日的数据（保持前端展示范围一致，但均线计算基于更长历史）
+        show_count = 120
+        dates = dates[-show_count:]
+        klines = klines[-show_count:]
+        volumes = volumes[-show_count:]
+        ma5 = ma5[-show_count:]
+        ma10 = ma10[-show_count:]
+        ma20 = ma20[-show_count:]
+        ma60 = ma60[-show_count:]
+        ma120 = ma120[-show_count:]
+        ma250 = ma250[-show_count:]
 
         dates_fmt = [d[4:6] + "/" + d[6:8] for d in dates]
+
+        # 获取该用户对该股的交易记录（用于K线买卖标记）
+        user_id = get_current_user_id()
+        trade_rows = get_trades_by_ts_code(user_id, ts_code)
+        trade_marks = []
+        for t in trade_rows:
+            if t["trade_type"] == "buy" and t.get("buy_price"):
+                d = (t.get("buy_date") or "")[:10].replace("-", "")
+                if len(d) == 8:
+                    trade_marks.append({
+                        "date": d[4:6] + "/" + d[6:8],
+                        "type": "buy",
+                        "price": float(t["buy_price"]),
+                        "volume": int(t.get("buy_volume", 0)),
+                    })
+            elif t["trade_type"] == "sell" and t.get("sell_price"):
+                d = (t.get("sell_date") or "")[:10].replace("-", "")
+                if len(d) == 8:
+                    trade_marks.append({
+                        "date": d[4:6] + "/" + d[6:8],
+                        "type": "sell",
+                        "price": float(t["sell_price"]),
+                        "volume": int(t.get("sell_volume", 0)),
+                    })
 
         return jsonify({
             "dates": dates_fmt,
             "klines": klines,
             "ma5": ma5,
+            "ma10": ma10,
             "ma20": ma20,
+            "ma60": ma60,
+            "ma120": ma120,
+            "ma250": ma250,
             "volumes": volumes,
+            "trades": trade_marks,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

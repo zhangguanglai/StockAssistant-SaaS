@@ -2035,10 +2035,27 @@
     <div style="margin-bottom:16px;padding:16px;background:var(--bg-card);border-radius:var(--radius-sm)"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:14px"><div><span style="color:var(--text-secondary)">持仓数量：</span><span class="num">{{detailPosition?.total_volume}}</span></div><div><span style="color:var(--text-secondary)">成本价：</span><span class="num">{{detailPosition?.avg_cost?.toFixed(3)}}</span></div><div><span style="color:var(--text-secondary)">总成本：</span><span class="num">¥{{formatNum(detailPosition?.total_cost)}}</span></div><div><span style="color:var(--text-secondary)">市值：</span><span class="num">¥{{formatNum(detailPosition?.market_value)}}</span></div><div><span style="color:var(--text-secondary)">止损价：</span><span class="num">{{detailPosition?.stop_loss||'-'}}</span></div><div><span style="color:var(--text-secondary)">止盈价：</span><span class="num">{{detailPosition?.stop_profit||'-'}}</span></div></div></div>
     <!-- K-line Chart -->
     <div style="margin-bottom:16px">
-        <div style="font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:8px">📈 近60日K线走势（MA5/MA20）</div>
+        <div style="font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+            <span>📈 K线分析</span>
+            <!-- 指标切换 -->
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+                <button v-for="ind in ['VOL','MACD','KDJ','RSI','BOLL']" :key="ind"
+                    :class="['btn','btn-xs',klineIndicator===ind?'btn-primary':'']"
+                    @click="klineIndicator=ind;renderKlineChart()"
+                    style="font-size:11px;padding:2px 8px">{{ind}}</button>
+            </div>
+        </div>
+        <!-- 均线显隐控制 -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+            <span style="font-size:11px;color:var(--text-muted)">均线:</span>
+            <label v-for="(vis,key) in maVisibility" :key="key" style="display:flex;align-items:center;gap:2px;cursor:pointer;font-size:11px;color:var(--text-secondary)">
+                <input type="checkbox" v-model="maVisibility[key]" @change="renderKlineChart()" style="width:12px;height:12px">
+                <span>{{key.toUpperCase()}}</span>
+            </label>
+        </div>
         <div v-if="klineLoading" style="text-align:center;padding:40px;color:var(--text-muted)">⏳ 正在加载K线数据...</div>
         <div v-if="!klineLoading && (!klineData || !klineData.dates || klineData.dates.length===0)" style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">⚠️ K线数据暂不可用</div>
-        <div id="klineChart" style="width:100%;height:360px"></div>
+        <div id="klineChart" style="width:100%;height:400px"></div>
     </div>
     <div class="trade-list">
         <div class="trade-item" v-for="t in detailPosition?.trades" :key="t.trade_id">

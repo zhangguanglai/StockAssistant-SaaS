@@ -491,6 +491,19 @@ def get_all_trades(user_id=1):
         return [dict(row) for row in cur.fetchall()]
 
 
+def get_trades_by_ts_code(user_id, ts_code):
+    """获取某用户对某只股票的所有交易记录（用于K线买卖标记）"""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT t.trade_type, t.buy_price, t.buy_volume, t.buy_date,
+                   t.sell_price, t.sell_volume, t.sell_date
+            FROM trades t JOIN positions p ON t.position_id = p.id
+            WHERE p.user_id=? AND p.ts_code=?
+            ORDER BY t.created_at
+        """, (user_id, ts_code))
+        return [dict(row) for row in cur.fetchall()]
+
+
 def add_trade(position_id, trade_type, **kwargs):
     """添加交易记录"""
     now = datetime.now().isoformat()

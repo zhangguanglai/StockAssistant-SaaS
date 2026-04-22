@@ -241,6 +241,8 @@
     const alertAutoMode=ref(false),alertAutoTimer=ref(null);
     // K-line
     const klineData=ref(null),klineLoading=ref(false);
+    const klineIndicator=ref('MACD'); // 副图指标: MACD/KDJ/RSI/BOLL/VOL
+    const maVisibility=ref({ma5:true,ma10:false,ma20:true,ma60:false,ma120:false,ma250:false});
     // Params
     const screenParams=ref([]);
     const paramsLoading=ref(false);
@@ -502,6 +504,65 @@
     }
 
     // === K-line Functions ===
+    // === K-line Technical Indicator Calculators ===
+    function calcEMA(arr,period){
+        const k=2/(period+1);
+        const ema=[arr[0]];
+        for(let i=1;i<arr.length;i++){ema.push(arr[i]*k+ema[i-1]*(1-k))}
+        return ema;
+    }
+    function calcMACD(prices,fast=12,slow=26,signal=9){
+        const emaFast=calcEMA(prices,fast),emaSlow=calcEMA(prices,slow);
+        const dif=emaFast.map((v,i)=>v-emaSlow[i]);
+        const dea=calcEMA(dif,signal);
+        const macd=dif.map((v,i)=>(v-dea[i])*2);
+        return {dif,dea,macd};
+    }
+    function calcKDJ(highs,lows,closes,n=9,m1=3,m2=3){
+        const rsv=[];
+        for(let i=0;i<closes.length;i++){
+            if(i<n-1){rsv.push(null);continue}
+            const hh=Math.max(...highs.slice(i-n+1,i+1));
+            const ll=Math.min(...lows.slice(i-n+1,i+1));
+            rsv.push(hh===ll?50:(closes[i]-ll)/(hh-ll)*100);
+        }
+        const K=[rsv[n-1]||50],D=[rsv[n-1]||50];
+        for(let i=n;i<rsv.length;i++){
+            K.push((2*D[D.length-1]+rsv[i])/3);
+            D.push((2*D[D.length-1]+K[K.length-1])/3);
+        }
+        for(let i=0;i<n-1;i++){K.unshift(null);D.unshift(null)}
+        const J=K.map((k,i)=>k===null?null:3*k-2*D[i]);
+        return {k:K,d:D,j:J};
+    }
+    function calcRSI(prices,period=14){
+        const rsi=[];
+        for(let i=0;i<prices.length;i++){
+            if(i<period){rsi.push(null);continue}
+            let gain=0,loss=0;
+            for(let j=i-period+1;j<=i;j++){
+                const diff=prices[j]-prices[j-1];
+                if(diff>0)gain+=diff;else loss+=-diff;
+            }
+            const avgGain=gain/period,avgLoss=loss/period;
+            if(avgLoss===0)rsi.push(100);
+            else rsi.push(100-(100/(1+avgGain/avgLoss)));
+        }
+        return rsi;
+    }
+    function calcBOLL(prices,period=20,stdMul=2){
+        const ma=[],upper=[],lower=[];
+        for(let i=0;i<prices.length;i++){
+            if(i<period-1){ma.push(null);upper.push(null);lower.push(null);continue}
+            const slice=prices.slice(i-period+1,i+1);
+            const m=slice.reduce((a,b)=>a+b,0)/period;
+            const variance=slice.reduce((a,b)=>a+Math.pow(b-m,2),0)/period;
+            const s=Math.sqrt(variance);
+            ma.push(m);upper.push(m+stdMul*s);lower.push(m-stdMul*s);
+        }
+        return {ma,upper,lower};
+    }
+
     async function loadKline(tsCode){
         klineLoading.value=true;klineData.value=null;
         try{
@@ -516,38 +577,160 @@
         const el=document.getElementById('klineChart');
         if(!el||!klineData.value)return;
         if(!klineChart)klineChart=echarts.init(el,'dark');
-        // API returns: dates[], klines[[o,c,l,h],...], ma5[], ma20[], volumes[]
         const dates=klineData.value.dates||[];
         const klines=klineData.value.klines||[];
-        const ma5=klineData.value.ma5||[];
-        const ma20=klineData.value.ma20||[];
         const volumes=klineData.value.volumes||[];
         if(dates.length===0)return;
         const upColor='#ef4444',downColor='#22c55e';
-        // Build tooltip data for lookup
+        const closes=klines.map(k=>k[1]);
+        const highs=klines.map(k=>k[3]);
+        const lows=klines.map(k=>k[2]);
+
+        // 均线数据
+        const maData={
+            ma5:klineData.value.ma5||[],
+            ma10:klineData.value.ma10||[],
+            ma20:klineData.value.ma20||[],
+            ma60:klineData.value.ma60||[],
+            ma120:klineData.value.ma120||[],
+            ma250:klineData.value.ma250||[]
+        };
+        const maColors={ma5:'#ffffff',ma10:'#f59e0b',ma20:'#3b82f6',ma60:'#a855f7',ma120:'#22c55e',ma250:'#ef4444'};
+
+        // 副图指标计算
+        const indicator=klineIndicator.value;
+        let subSeries=[];
+        let subYAxis={type:'value',gridIndex:1,scale:true,splitNumber:2,axisLabel:{color:'#8b8fa3',fontSize:9},splitLine:{show:false},axisLine:{show:false}};
+
+        if(indicator==='MACD'){
+            const macd=calcMACD(closes);
+            subSeries=[
+                {name:'DIF',type:'line',xAxisIndex:1,yAxisIndex:1,data:macd.dif,smooth:true,lineStyle:{width:1,color:'#f59e0b'},symbol:'none'},
+                {name:'DEA',type:'line',xAxisIndex:1,yAxisIndex:1,data:macd.dea,smooth:true,lineStyle:{width:1,color:'#3b82f6'},symbol:'none'},
+                {name:'MACD',type:'bar',xAxisIndex:1,yAxisIndex:1,data:macd.macd.map((v,i)=>({value:v,itemStyle:{color:v>=0?upColor:downColor}})),barMaxWidth:4}
+            ];
+        }else if(indicator==='KDJ'){
+            const kdj=calcKDJ(highs,lows,closes);
+            subSeries=[
+                {name:'K',type:'line',xAxisIndex:1,yAxisIndex:1,data:kdj.k,smooth:true,lineStyle:{width:1,color:'#f59e0b'},symbol:'none'},
+                {name:'D',type:'line',xAxisIndex:1,yAxisIndex:1,data:kdj.d,smooth:true,lineStyle:{width:1,color:'#3b82f6'},symbol:'none'},
+                {name:'J',type:'line',xAxisIndex:1,yAxisIndex:1,data:kdj.j,smooth:true,lineStyle:{width:1,color:'#ef4444'},symbol:'none'}
+            ];
+            subYAxis={...subYAxis,max:100,min:0};
+        }else if(indicator==='RSI'){
+            const rsi=calcRSI(closes,14);
+            subSeries=[
+                {name:'RSI',type:'line',xAxisIndex:1,yAxisIndex:1,data:rsi,smooth:true,lineStyle:{width:1,color:'#a855f7'},symbol:'none',markLine:{silent:true,symbol:'none',data:[{yAxis:70,lineStyle:{color:'#ef4444',type:'dashed'}},{yAxis:30,lineStyle:{color:'#22c55e',type:'dashed'}}]}}
+            ];
+            subYAxis={...subYAxis,max:100,min:0};
+        }else if(indicator==='BOLL'){
+            // BOLL显示在主图上，副图回归成交量
+            subSeries=[{type:'bar',xAxisIndex:1,yAxisIndex:1,data:volumes.map((v,i)=>({value:v,itemStyle:{color:klines[i]&&klines[i][1]>=klines[i][0]?upColor:downColor}})),barMaxWidth:4}];
+        }else{
+            // VOL (默认)
+            subSeries=[{type:'bar',xAxisIndex:1,yAxisIndex:1,data:volumes.map((v,i)=>({value:v,itemStyle:{color:klines[i]&&klines[i][1]>=klines[i][0]?upColor:downColor}})),barMaxWidth:4}];
+        }
+
+        // 构建主图series
+        const mainSeries=[{name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:klines,itemStyle:{color:upColor,color0:downColor,borderColor:upColor,borderColor0:downColor}}];
+        // 均线
+        Object.keys(maVisibility.value).forEach(key=>{
+            if(maVisibility.value[key]){
+                const label=key.toUpperCase();
+                mainSeries.push({name:label,type:'line',xAxisIndex:0,yAxisIndex:0,data:maData[key],smooth:true,lineStyle:{width:1,color:maColors[key]},symbol:'none',connectNulls:true});
+            }
+        });
+        // BOLL主图叠加
+        if(indicator==='BOLL'){
+            const boll=calcBOLL(closes);
+            mainSeries.push({name:'BOLL上轨',type:'line',xAxisIndex:0,yAxisIndex:0,data:boll.upper,smooth:true,lineStyle:{width:1,color:'#f59e0b',type:'dashed'},symbol:'none'});
+            mainSeries.push({name:'BOLL中轨',type:'line',xAxisIndex:0,yAxisIndex:0,data:boll.ma,smooth:true,lineStyle:{width:1,color:'#ffffff'},symbol:'none'});
+            mainSeries.push({name:'BOLL下轨',type:'line',xAxisIndex:0,yAxisIndex:0,data:boll.lower,smooth:true,lineStyle:{width:1,color:'#22c55e',type:'dashed'},symbol:'none'});
+        }
+
+        // 交易标记数据
+        const tradeMarks=klineData.value.trades||[];
+        const buyMarks=tradeMarks.filter(t=>t.type==='buy').map(t=>[t.date,t.price]);
+        const sellMarks=tradeMarks.filter(t=>t.type==='sell').map(t=>[t.date,t.price]);
+
+        const legendData=['K线'];
+        Object.keys(maVisibility.value).forEach(key=>{if(maVisibility.value[key])legendData.push(key.toUpperCase())});
+        if(indicator==='BOLL')legendData.push('BOLL上轨','BOLL中轨','BOLL下轨');
+        if(indicator==='MACD')legendData.push('DIF','DEA','MACD');
+        if(indicator==='KDJ')legendData.push('K','D','J');
+        if(indicator==='RSI')legendData.push('RSI');
+        if(buyMarks.length)legendData.push('买入');
+        if(sellMarks.length)legendData.push('卖出');
+
         const dayData=dates.map((d,i)=>{
             const k=klines[i]||[0,0,0,0];
-            return{date:d,open:k[0],close:k[1],low:k[2],high:k[3],vol:volumes[i]||0,ma5:ma5[i],ma20:ma20[i]};
+            return{date:d,open:k[0],close:k[1],low:k[2],high:k[3],vol:volumes[i]||0,
+                ma5:maData.ma5[i],ma10:maData.ma10[i],ma20:maData.ma20[i],ma60:maData.ma60[i],ma120:maData.ma120[i],ma250:maData.ma250[i]};
         });
+
+        const allSeries=[...mainSeries,...subSeries];
+        if(buyMarks.length){
+            allSeries.push({
+                name:'买入',type:'scatter',xAxisIndex:0,yAxisIndex:0,
+                symbol:'triangle',symbolSize:14,data:buyMarks,
+                itemStyle:{color:'#3b82f6'},
+                label:{show:true,position:'top',formatter:'B',color:'#3b82f6',fontSize:10,fontWeight:'bold',distance:4},
+                z:10
+            });
+        }
+        if(sellMarks.length){
+            allSeries.push({
+                name:'卖出',type:'scatter',xAxisIndex:0,yAxisIndex:0,
+                symbol:'triangle',symbolSize:14,symbolRotate:180,data:sellMarks,
+                itemStyle:{color:'#ef4444'},
+                label:{show:true,position:'bottom',formatter:'S',color:'#ef4444',fontSize:10,fontWeight:'bold',distance:4},
+                z:10
+            });
+        }
+
         klineChart.setOption({
             backgroundColor:'transparent',
-            tooltip:{trigger:'axis',axisPointer:{type:'cross'},formatter:function(params){
-                const idx=params[0]?.dataIndex;if(idx===undefined||!dayData[idx])return'';
-                const d=dayData[idx];
-                return `<b>${d.date}</b><br/>开: ¥${d.open}<br/>收: ¥${d.close}<br/>低: ¥${d.low}<br/>高: ¥${d.high}<br/>量: ${d.vol}手<br/>MA5: ${d.ma5!=null?'¥'+d.ma5:'-'}<br/>MA20: ${d.ma20!=null?'¥'+d.ma20:'-'}`;
-            }},
-            legend:{data:['K线','MA5','MA20'],top:0,textStyle:{color:'#8b8fa3',fontSize:11}},
-            grid:[{left:60,right:20,top:30,height:'55%'},{left:60,right:20,top:'75%',height:'15%'}],
+            tooltip:{
+                trigger:'axis',
+                confine:true,
+                backgroundColor:'rgba(30,33,48,0.95)',
+                borderColor:'#3b82f6',
+                borderWidth:1,
+                textStyle:{color:'#e2e8f0',fontSize:12},
+                axisPointer:{type:'cross',label:{backgroundColor:'#3b82f6',color:'#fff'}},
+                formatter:function(params){
+                    const idx=params[0]?.dataIndex;if(idx===undefined||!dayData[idx])return'';
+                    const d=dayData[idx];
+                    let html=`<div style="font-weight:700;margin-bottom:4px">${d.date}</div>`+
+                        `<div>开 <span style="color:#f59e0b">¥${d.open}</span> &nbsp;收 <span style="color:#f59e0b">¥${d.close}</span> &nbsp;低 <span style="color:#22c55e">¥${d.low}</span> &nbsp;高 <span style="color:#ef4444">¥${d.high}</span></div>`+
+                        `<div style="margin-top:4px">量 ${d.vol}手`;
+                    if(d.ma5!=null)html+=` &nbsp;MA5 <span style="color:#fff">¥${d.ma5}</span>`;
+                    if(d.ma10!=null)html+=` &nbsp;MA10 <span style="color:#f59e0b">¥${d.ma10}</span>`;
+                    if(d.ma20!=null)html+=` &nbsp;MA20 <span style="color:#3b82f6">¥${d.ma20}</span>`;
+                    if(d.ma60!=null)html+=` &nbsp;MA60 <span style="color:#a855f7">¥${d.ma60}</span>`;
+                    if(d.ma120!=null)html+=` &nbsp;MA120 <span style="color:#22c55e">¥${d.ma120}</span>`;
+                    if(d.ma250!=null)html+=` &nbsp;MA250 <span style="color:#ef4444">¥${d.ma250}</span>`;
+                    html+='</div>';
+                    const dayTrades=tradeMarks.filter(t=>t.date===d.date);
+                    if(dayTrades.length){
+                        html+=`<div style="margin-top:6px;border-top:1px solid #2a2e3f;padding-top:4px">`;
+                        dayTrades.forEach(t=>{
+                            const color=t.type==='buy'?'#3b82f6':'#ef4444';
+                            const label=t.type==='buy'?'买入':'卖出';
+                            html+=`<span style="color:${color};font-weight:700">${label}</span> ¥${t.price} × ${t.volume}股 &nbsp;`;
+                        });
+                        html+='</div>';
+                    }
+                    return html;
+                }
+            },
+            legend:{data:legendData,top:0,textStyle:{color:'#8b8fa3',fontSize:10},itemWidth:14,itemHeight:8},
+            grid:[{left:50,right:10,top:32,height:'55%'},{left:50,right:10,top:'72%',height:'18%'}],
             xAxis:[{type:'category',data:dates,gridIndex:0,axisLabel:{color:'#8b8fa3',fontSize:10},axisLine:{lineStyle:{color:'#2a2e3f'}},splitLine:{show:false}},{type:'category',data:dates,gridIndex:1,axisLabel:{show:false},axisLine:{lineStyle:{color:'#2a2e3f'}}}],
-            yAxis:[{type:'value',gridIndex:0,scale:true,splitNumber:4,axisLabel:{color:'#8b8fa3',fontSize:10,formatter:v=>'¥'+v.toFixed(2)},splitLine:{lineStyle:{color:'#1e2130'}},axisLine:{show:false}},{type:'value',gridIndex:1,scale:true,splitNumber:2,axisLabel:{color:'#8b8fa3',fontSize:9},splitLine:{show:false},axisLine:{show:false}}],
-            dataZoom:[{type:'inside',xAxisIndex:[0,1],start:60,end:100},{type:'slider',xAxisIndex:[0,1],start:60,end:100,bottom:2,height:16,textStyle:{color:'#8b8fa3',fontSize:10},borderColor:'#2a2e3f',fillerColor:'rgba(59,130,246,0.15)',handleStyle:{color:'#3b82f6'}}],
-            series:[
-                {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:klines,itemStyle:{color:upColor,color0:downColor,borderColor:upColor,borderColor0:downColor}},
-                {name:'MA5',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma5,smooth:true,lineStyle:{width:1,color:'#f59e0b'},symbol:'none',connectNulls:true},
-                {name:'MA20',type:'line',xAxisIndex:0,yAxisIndex:0,data:ma20,smooth:true,lineStyle:{width:1,color:'#3b82f6'},symbol:'none',connectNulls:true},
-                {type:'bar',xAxisIndex:1,yAxisIndex:1,data:volumes.map((v,i)=>({value:v,itemStyle:{color:klines[i]&&klines[i][1]>=klines[i][0]?upColor:downColor}})),barMaxWidth:8}
-            ]
-        });
+            yAxis:[{type:'value',gridIndex:0,scale:true,splitNumber:4,axisLabel:{color:'#8b8fa3',fontSize:10,formatter:v=>'¥'+v.toFixed(2)},splitLine:{lineStyle:{color:'#1e2130'}},axisLine:{show:false}},subYAxis],
+            dataZoom:[{type:'inside',xAxisIndex:[0,1],start:50,end:100},{type:'slider',xAxisIndex:[0,1],start:50,end:100,bottom:2,height:14,textStyle:{color:'#8b8fa3',fontSize:9},borderColor:'#2a2e3f',fillerColor:'rgba(59,130,246,0.15)',handleStyle:{color:'#3b82f6'}}],
+            series:allSeries
+        },true); // true = notMerge, 完全重置
     }
 
     // Screener
@@ -1668,7 +1851,7 @@
         sellCheckData,sellCheckLoading,sellConfirmedCheck,loadSellCheck,pickPrice,quickSell,
         buyConfirmedCheck,
         reviewPeriod,reviewLoading,reviewData,regimeLoading,regimeData,showStrategyDetail,backtestDays,backtestHold,backtestLoading,backtestData,alertCheckLoading,alertCheckResult,alertAutoMode,alertAutoTimer,toggleAlertAuto,
-        klineData,klineLoading,
+        klineData,klineLoading,klineIndicator,maVisibility,renderKlineChart,
         screenParams,paramsLoading,paramsDefault,forceMode,spLoading,spData,spError,spLoadedAt,loadStrategyPerformance,
         refreshData,searchStock,selectStock,submitPosition,openAddModal,openTradeModal,
         openSellModal,submitSell,submitPositionWithConfirm,openAlertModal,submitAlerts,clearAlerts,setStopLoss,setTakeProfit,openDetailModal,closeDetailModal,openTradeDetailModal,closeTradeDetailModal,openAdviceModal,quickAddFromAdvice,quickSellFromAdvice,confirmDelete,deleteTrade,toggleActionMenu,closeActionMenu,
