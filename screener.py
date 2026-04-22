@@ -3104,8 +3104,13 @@ def run_oversold_bounce_screener(top_n=20, silent=False, params=None):
                     tech_improve_signals.append("显著放量")
 
         # 信号F：出现阳线（【v3.3修复】涨幅>0.5%才算有效改善，排除微涨噪音）
+        # 【修复】超跌反弹场景中，止跌日可能是阴线（长下影线），不应强制要求阳线
+        # 改为：阳线 或 当日有止跌信号（长下影线/放量阳线/MACD金叉）即算技术改善
         if last_pct_chg > 0.5:
             tech_improve_signals.append("今日阳线")
+        elif stop_signals and last_pct_chg > -3:
+            # 跌幅不大（>-3%）且有止跌信号，也算技术改善迹象
+            tech_improve_signals.append("止跌迹象")
 
         # 技术面改善信号统计（去重）
         tech_confirm_count = len(set(tech_improve_signals))
