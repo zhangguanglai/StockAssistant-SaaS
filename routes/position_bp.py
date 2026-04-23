@@ -1896,10 +1896,24 @@ def get_kline_data(ts_code):
         if not adj_df.empty:
             df = adjust_kline_by_adj_factor(df, adj_df)
 
-        dates = df["trade_date"].tolist()
+        # 获取换手率数据（用于主升浪确认信号）
+        turnover_rates = {}
+        try:
+            basic_df = pro.daily_basic(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            if not basic_df.empty:
+                basic_df = basic_df.sort_values("trade_date")
+                for _, row in basic_df.iterrows():
+                    turnover_rates[str(row["trade_date"])] = float(row.get("turnover_rate", 0) or 0)
+        except Exception:
+            pass
+
+        # 将 trade_date 统一为字符串，确保日期比较类型一致
+        dates = [str(d) for d in df["trade_date"].tolist()]
         klines = df[["open", "close", "low", "high"]].round(3).values.tolist()
         closes = df["close"].tolist()
         volumes = df["vol"].tolist()
+        # 日涨幅（Tushare返回的是百分比数值，如2.5表示涨2.5%）
+        pct_chgs = df["pct_chg"].round(2).tolist()
 
         # 计算多周期均线（使用pandas rolling计算）
         import pandas as pd
@@ -1928,13 +1942,37 @@ def get_kline_data(ts_code):
                     today_close = float(rt["price"])
                     today_high = float(rt.get("high", max(today_open, today_close)))
                     today_low = float(rt.get("low", min(today_open, today_close)))
-                    today_vol = int(rt.get("vol", 0))
+
+                    # 成交量：新浪 vol 单位为股需除以100转为手，东方财富 vol 已是手
+                    raw_vol = int(rt.get("vol", 0))
+                    vol_divisor = 100 if rt.get("_source") == "sina" else 1
+                    today_vol = raw_vol // vol_divisor
+
+                    # 当日K线需要做前复权处理（实时行情为未复权价格）
+                    if not adj_df.empty:
+                        latest_adj = adj_df.iloc[-1]["adj_factor"]
+                        if latest_adj and latest_adj > 0:
+                            adj_ratio = 1.0 / latest_adj
+                            # 使用 pre_close 对比判断复权因子
+                            # 从 Tushare 最后一条记录获取复权前收盘价
+                            last_raw_close = float(df["close"].iloc[-1])  # 已复权价
+                            adj_factor = 1.0  # 默认不调整
+                            if pre_close > 0 and last_raw_close > 0:
+                                adj_factor = last_raw_close / pre_close
+                            today_open = today_open * adj_factor
+                            today_close = today_close * adj_factor
+                            today_high = today_high * adj_factor
+                            today_low = today_low * adj_factor
+
+                    # 计算当日涨幅
+                    today_pct = round((today_close - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0.0
 
                     dates.append(today_str)
                     klines.append([round(today_open, 3), round(today_close, 3),
                                    round(today_low, 3), round(today_high, 3)])
                     volumes.append(today_vol)
                     closes.append(today_close)
+                    pct_chgs.append(today_pct)
                     # 均线追加近似值（当日均线 ≈ 前一日值，盘中数据不完整属正常）
                     for ma_list in (ma5, ma10, ma20, ma60, ma120, ma250):
                         ma_list.append(ma_list[-1] if ma_list and ma_list[-1] is not None else None)
@@ -1946,6 +1984,7 @@ def get_kline_data(ts_code):
         dates = dates[-show_count:]
         klines = klines[-show_count:]
         volumes = volumes[-show_count:]
+        pct_chgs = pct_chgs[-show_count:]
         ma5 = ma5[-show_count:]
         ma10 = ma10[-show_count:]
         ma20 = ma20[-show_count:]
@@ -1954,6 +1993,83 @@ def get_kline_data(ts_code):
         ma250 = ma250[-show_count:]
 
         dates_fmt = [d[4:6] + "/" + d[6:8] for d in dates]
+
+        # 计算策略信号（买入/卖出关键点）
+        # 降噪规则：1)同一天互斥 2)同类型信号5天内只保留第一个 3)提高影线信号门槛
+        raw_signals = []
+        for i in range(len(dates)):
+            sig = []
+            # 均线金叉死叉（趋势转折，优先级最高）
+            if i >= 1 and ma5[i] is not None and ma20[i] is not None:
+                if ma5[i-1] is not None and ma20[i-1] is not None:
+                    if ma5[i-1] <= ma20[i-1] and ma5[i] > ma20[i]:
+                        sig.append({"type": "buy", "label": "MA金叉", "desc": "MA5上穿MA20", "priority": 3})
+                    elif ma5[i-1] >= ma20[i-1] and ma5[i] < ma20[i]:
+                        sig.append({"type": "sell", "label": "MA死叉", "desc": "MA5下穿MA20", "priority": 3})
+            # MA多头/空头排列（MA5>MA10>MA20 或 MA5<MA10<MA20）
+            if i >= 1 and ma5[i] is not None and ma10[i] is not None and ma20[i] is not None:
+                if ma5[i] > ma10[i] > ma20[i] and not (ma5[i-1] > ma10[i-1] > ma20[i-1]):
+                    sig.append({"type": "buy", "label": "多头排列", "desc": "MA5>MA10>MA20", "priority": 2})
+                elif ma5[i] < ma10[i] < ma20[i] and not (ma5[i-1] < ma10[i-1] < ma20[i-1]):
+                    sig.append({"type": "sell", "label": "空头排列", "desc": "MA5<MA10<MA20", "priority": 2})
+            # 价格突破/跌破均线（位置信号，优先级高）
+            if i >= 1 and ma20[i] is not None:
+                prev_close = klines[i-1][1]
+                curr_close = klines[i][1]
+                if prev_close <= ma20[i-1] and curr_close > ma20[i]:
+                    sig.append({"type": "buy", "label": "突破MA20", "desc": "收盘价站上MA20", "priority": 1})
+                elif prev_close >= ma20[i-1] and curr_close < ma20[i]:
+                    sig.append({"type": "sell", "label": "跌破MA20", "desc": "收盘价跌破MA20", "priority": 1})
+            # 主升浪确认（量比>2且实际换手率>=5%，优先级最高）
+            if i >= 5:
+                avg_vol = sum(volumes[max(0,i-5):i]) / 5
+                vol_ratio = volumes[i] / avg_vol if avg_vol > 0 else 0
+                turnover = turnover_rates.get(dates[i], 0)
+                if vol_ratio > 2 and turnover >= 5:
+                    sig.append({"type": "buy", "label": "主升浪", "desc": f"量比{vol_ratio:.1f}+换手{turnover:.1f}%", "priority": 4})
+            # 影线信号已移除（噪音过大，意义有限）
+            raw_signals.append(sig)
+
+        # 降噪处理
+        signals = []
+        last_buy_idx = -10
+        last_sell_idx = -10
+        for i in range(len(raw_signals)):
+            sigs = raw_signals[i]
+            if not sigs:
+                signals.append([])
+                continue
+
+            # 同一天互斥：买入和卖出同时出现时，保留优先级高的
+            buy_sigs = [s for s in sigs if s["type"] == "buy"]
+            sell_sigs = [s for s in sigs if s["type"] == "sell"]
+            if buy_sigs and sell_sigs:
+                max_buy_pri = max(s["priority"] for s in buy_sigs)
+                max_sell_pri = max(s["priority"] for s in sell_sigs)
+                if max_buy_pri > max_sell_pri:
+                    sigs = buy_sigs
+                elif max_sell_pri > max_buy_pri:
+                    sigs = sell_sigs
+                else:
+                    if ma20[i] is not None and closes[i] > ma20[i]:
+                        sigs = buy_sigs
+                    else:
+                        sigs = sell_sigs
+
+            # 连续信号去重：同类型信号5天内只保留第一个
+            # 额外规则：如果上次是买入，这次也是买入，且中间没有卖出，则跳过（避免重复追涨）
+            filtered = []
+            for s in sigs:
+                if s["type"] == "buy":
+                    if i - last_buy_idx >= 5:
+                        filtered.append(s)
+                        last_buy_idx = i
+                else:
+                    if i - last_sell_idx >= 5:
+                        filtered.append(s)
+                        last_sell_idx = i
+
+            signals.append([{"type": s["type"], "label": s["label"], "desc": s["desc"]} for s in filtered])
 
         # 获取该用户对该股的交易记录（用于K线买卖标记）
         user_id = get_current_user_id()
@@ -1989,6 +2105,8 @@ def get_kline_data(ts_code):
             "ma120": ma120,
             "ma250": ma250,
             "volumes": volumes,
+            "pct_chgs": pct_chgs,
+            "signals": signals,
             "trades": trade_marks,
         })
     except Exception as e:

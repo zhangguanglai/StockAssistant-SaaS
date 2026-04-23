@@ -953,10 +953,12 @@ setup(){
         if(buyMarks.length)legendData.push('买入');
         if(sellMarks.length)legendData.push('卖出');
 
+        const pctChgs=klineData.value.pct_chgs||[];
+        const signals=klineData.value.signals||[];
         const dayData=dates.map((d,i)=>{
             const k=klines[i]||[0,0,0,0];
-            return{date:d,open:k[0],close:k[1],low:k[2],high:k[3],vol:volumes[i]||0,
-                ma5:maData.ma5[i],ma10:maData.ma10[i],ma20:maData.ma20[i],ma60:maData.ma60[i],ma120:maData.ma120[i],ma250:maData.ma250[i]};
+            return{date:d,open:k[0],close:k[1],low:k[2],high:k[3],vol:volumes[i]||0,pct:pctChgs[i]||0,
+                ma5:maData.ma5[i],ma10:maData.ma10[i],ma20:maData.ma20[i],ma60:maData.ma60[i],ma120:maData.ma120[i],ma250:maData.ma250[i],signals:signals[i]||[]};
         });
 
         const allSeries=[...mainSeries,...subSeries];
@@ -979,6 +981,42 @@ setup(){
             });
         }
 
+        // 策略信号 markPoint — 简洁圆点标记，避免与K线/交易标记重叠
+        const buySignalPoints=[];
+        const sellSignalPoints=[];
+        dates.forEach((d,i)=>{
+            const sigs=signals[i]||[];
+            const high=klines[i][3];
+            const low=klines[i][2];
+            sigs.forEach(s=>{
+                if(s.type==='buy'){
+                    buySignalPoints.push({name:s.label,xAxis:d,yAxis:low});
+                }else{
+                    sellSignalPoints.push({name:s.label,xAxis:d,yAxis:high});
+                }
+            });
+        });
+        if(buySignalPoints.length){
+            allSeries.push({
+                name:'买点',type:'scatter',xAxisIndex:0,yAxisIndex:0,
+                data:buySignalPoints.map(p=>[p.xAxis,p.yAxis]),
+                symbol:'triangle',symbolSize:10,
+                itemStyle:{color:'#3b82f6',opacity:0.9},
+                label:{show:true,position:'bottom',fontSize:8,color:'#3b82f6',formatter:(p,i)=>buySignalPoints[i]?.name||'',distance:2},
+                z:8
+            });
+        }
+        if(sellSignalPoints.length){
+            allSeries.push({
+                name:'卖点',type:'scatter',xAxisIndex:0,yAxisIndex:0,
+                data:sellSignalPoints.map(p=>[p.xAxis,p.yAxis]),
+                symbol:'triangle',symbolSize:10,symbolRotate:180,
+                itemStyle:{color:'#ef4444',opacity:0.9},
+                label:{show:true,position:'top',fontSize:8,color:'#ef4444',formatter:(p,i)=>sellSignalPoints[i]?.name||'',distance:2},
+                z:8
+            });
+        }
+
         klineChart.setOption({
             backgroundColor:'transparent',
             tooltip:{
@@ -992,7 +1030,9 @@ setup(){
                 formatter:function(params){
                     const idx=params[0]?.dataIndex;if(idx===undefined||!dayData[idx])return'';
                     const d=dayData[idx];
-                    let html=`<div style="font-weight:700;margin-bottom:4px">${d.date}</div>`+
+                    const pctColor=d.pct>0?'#ef4444':(d.pct<0?'#22c55e':'#8b8fa3');
+                    const pctSign=d.pct>0?'+':'';
+                    let html=`<div style="font-weight:700;margin-bottom:4px">${d.date} <span style="color:${pctColor};margin-left:8px">${pctSign}${d.pct}%</span></div>`+
                         `<div>开 <span style="color:#f59e0b">¥${d.open}</span> &nbsp;收 <span style="color:#f59e0b">¥${d.close}</span> &nbsp;低 <span style="color:#22c55e">¥${d.low}</span> &nbsp;高 <span style="color:#ef4444">¥${d.high}</span></div>`+
                         `<div style="margin-top:4px">量 ${d.vol}手`;
                     if(d.ma5!=null)html+=` &nbsp;MA5 <span style="color:#fff">¥${d.ma5}</span>`;
@@ -1002,6 +1042,14 @@ setup(){
                     if(d.ma120!=null)html+=` &nbsp;MA120 <span style="color:#22c55e">¥${d.ma120}</span>`;
                     if(d.ma250!=null)html+=` &nbsp;MA250 <span style="color:#ef4444">¥${d.ma250}</span>`;
                     html+='</div>';
+                    if(d.signals&&d.signals.length){
+                        html+=`<div style="margin-top:6px;border-top:1px solid #2a2e3f;padding-top:4px">`;
+                        d.signals.forEach(s=>{
+                            const color=s.type==='buy'?'#3b82f6':'#ef4444';
+                            html+=`<span style="color:${color};font-weight:700">${s.label}</span> <span style="color:#8b8fa3;font-size:11px">${s.desc}</span> &nbsp;`;
+                        });
+                        html+='</div>';
+                    }
                     const dayTrades=tradeMarks.filter(t=>t.date===d.date);
                     if(dayTrades.length){
                         html+=`<div style="margin-top:6px;border-top:1px solid #2a2e3f;padding-top:4px">`;
