@@ -46,7 +46,7 @@ def get_cursor():
 
 
 # [S-03] SQL 表名白名单，防止潜在的 SQL 注入
-_ALLOWED_TABLE_NAMES = frozenset({"users", "positions", "trades", "capital", "settings", "watch_list", "db_version"})
+_ALLOWED_TABLE_NAMES = frozenset({"users", "positions", "trades", "capital", "settings", "watch_list", "screen_history", "db_version", "trade_plans", "price_alerts"})
 
 
 def _get_table_columns(cur, table_name):
@@ -249,6 +249,59 @@ def init_tables():
 
         # 迁移已有的 JSON 数据（一次性）
         _migrate_screen_history_json(cur)
+
+        # ============================================================
+        # 交易计划表（v3.7 P0优化新增）
+        # ============================================================
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trade_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                ts_code TEXT NOT NULL,
+                name TEXT DEFAULT '',
+                plan_type TEXT NOT NULL CHECK(plan_type IN ('buy', 'sell')),
+                target_price REAL,
+                trigger_price REAL,
+                planned_volume INTEGER DEFAULT 0,
+                planned_amount REAL DEFAULT 0,
+                strategy TEXT DEFAULT '',
+                reason TEXT DEFAULT '',
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'triggered', 'executed', 'cancelled', 'expired')),
+                due_date TEXT,
+                executed_at TEXT,
+                executed_price REAL,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tp_user ON trade_plans(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tp_status ON trade_plans(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tp_code ON trade_plans(ts_code)")
+
+        # ============================================================
+        # 价格预警表（v3.7 P0优化新增）
+        # ============================================================
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS price_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                ts_code TEXT NOT NULL,
+                name TEXT DEFAULT '',
+                alert_type TEXT NOT NULL CHECK(alert_type IN ('price_change_pct', 'price_break', 'volume_spike')),
+                threshold REAL NOT NULL,
+                direction TEXT NOT NULL CHECK(direction IN ('above', 'below')),
+                status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'triggered')),
+                last_triggered TEXT,
+                note TEXT DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pa_user ON price_alerts(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pa_status ON price_alerts(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pa_code ON price_alerts(ts_code)")
 
         # ============================================================
         # 版本记录
@@ -972,3 +1025,150 @@ def save_portfolio_compat(data, user_id=1):
                           buy_volume=t.get("buy_volume", 0), fee=t.get("fee", 0),
                           reason=t.get("reason", ""), emotion=t.get("emotion", ""),
                           note=t.get("note", ""))
+
+
+# ============================================================
+# 交易计划相关操作（v3.7 P0优化新增）
+# ============================================================
+
+def get_trade_plans(user_id=1, status=None):
+    """获取交易计划列表，可选按状态过滤"""
+    with get_cursor() as cur:
+        if status:
+            cur.execute("""
+                SELECT * FROM trade_plans
+                WHERE user_id=? AND status=?
+                ORDER BY created_at DESC
+            """, (user_id, status))
+        else:
+            cur.execute("""
+                SELECT * FROM trade_plans
+                WHERE user_id=?
+                ORDER BY
+                    CASE status
+                        WHEN 'pending' THEN 1
+                        WHEN 'triggered' THEN 2
+                        WHEN 'executed' THEN 3
+                        WHEN 'cancelled' THEN 4
+                        WHEN 'expired' THEN 5
+                    END,
+                    created_at DESC
+            """, (user_id,))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_trade_plan(plan_id, user_id=None):
+    """获取单个交易计划"""
+    with get_cursor() as cur:
+        if user_id is not None:
+            cur.execute("SELECT * FROM trade_plans WHERE id=? AND user_id=?", (plan_id, user_id))
+        else:
+            cur.execute("SELECT * FROM trade_plans WHERE id=?", (plan_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def create_trade_plan(user_id=1, **kwargs):
+    """创建交易计划"""
+    now = datetime.now().isoformat()
+    fields = ["user_id", "created_at", "updated_at"]
+    values = [user_id, now, now]
+    for k, v in kwargs.items():
+        fields.append(k)
+        values.append(v)
+    placeholders = ", ".join(["?"] * len(values))
+    with get_cursor() as cur:
+        cur.execute(f"INSERT INTO trade_plans ({', '.join(fields)}) VALUES ({placeholders})", values)
+        return cur.lastrowid
+
+
+def update_trade_plan(plan_id, user_id=None, **kwargs):
+    """更新交易计划"""
+    kwargs["updated_at"] = datetime.now().isoformat()
+    fields = ", ".join(f"{k}=?" for k in kwargs)
+    values = list(kwargs.values())
+    if user_id is not None:
+        values.append(plan_id)
+        values.append(user_id)
+        with get_cursor() as cur:
+            cur.execute(f"UPDATE trade_plans SET {fields} WHERE id=? AND user_id=?", values)
+    else:
+        values.append(plan_id)
+        with get_cursor() as cur:
+            cur.execute(f"UPDATE trade_plans SET {fields} WHERE id=?", values)
+
+
+def delete_trade_plan(plan_id, user_id=None):
+    """删除交易计划"""
+    with get_cursor() as cur:
+        if user_id is not None:
+            cur.execute("DELETE FROM trade_plans WHERE id=? AND user_id=?", (plan_id, user_id))
+        else:
+            cur.execute("DELETE FROM trade_plans WHERE id=?", (plan_id,))
+
+
+# ============================================================
+# 价格预警相关操作（v3.7 P0优化新增）
+# ============================================================
+
+def get_price_alerts(user_id=1, status=None):
+    """获取价格预警列表"""
+    with get_cursor() as cur:
+        if status:
+            cur.execute("""
+                SELECT * FROM price_alerts
+                WHERE user_id=? AND status=?
+                ORDER BY created_at DESC
+            """, (user_id, status))
+        else:
+            cur.execute("""
+                SELECT * FROM price_alerts
+                WHERE user_id=?
+                ORDER BY
+                    CASE status
+                        WHEN 'active' THEN 1
+                        WHEN 'triggered' THEN 2
+                        WHEN 'inactive' THEN 3
+                    END,
+                    created_at DESC
+            """, (user_id,))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def create_price_alert(user_id=1, **kwargs):
+    """创建价格预警"""
+    now = datetime.now().isoformat()
+    fields = ["user_id", "created_at", "updated_at"]
+    values = [user_id, now, now]
+    for k, v in kwargs.items():
+        fields.append(k)
+        values.append(v)
+    placeholders = ", ".join(["?"] * len(values))
+    with get_cursor() as cur:
+        cur.execute(f"INSERT INTO price_alerts ({', '.join(fields)}) VALUES ({placeholders})", values)
+        return cur.lastrowid
+
+
+def update_price_alert(alert_id, user_id=None, **kwargs):
+    """更新价格预警"""
+    kwargs["updated_at"] = datetime.now().isoformat()
+    fields = ", ".join(f"{k}=?" for k in kwargs)
+    values = list(kwargs.values())
+    if user_id is not None:
+        values.append(alert_id)
+        values.append(user_id)
+        with get_cursor() as cur:
+            cur.execute(f"UPDATE price_alerts SET {fields} WHERE id=? AND user_id=?", values)
+    else:
+        values.append(alert_id)
+        with get_cursor() as cur:
+            cur.execute(f"UPDATE price_alerts SET {fields} WHERE id=?", values)
+
+
+def delete_price_alert(alert_id, user_id=None):
+    """删除价格预警"""
+    with get_cursor() as cur:
+        if user_id is not None:
+            cur.execute("DELETE FROM price_alerts WHERE id=? AND user_id=?", (alert_id, user_id))
+        else:
+            cur.execute("DELETE FROM price_alerts WHERE id=?", (alert_id,))

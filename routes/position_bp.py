@@ -17,6 +17,8 @@ from database import (
     create_position, update_position as db_update_position, delete_position as db_delete_position,
     get_trades, add_trade as db_add_trade, delete_trade as db_delete_trade,
     get_all_trades, get_trade_stats, get_trades_by_ts_code,
+    get_trade_plans, get_trade_plan, create_trade_plan, update_trade_plan, delete_trade_plan,
+    get_price_alerts, create_price_alert, update_price_alert, delete_price_alert,
 )
 from helpers import (
     pro, is_trade_time, should_use_realtime_source, enrich_positions, calc_position_meta,
@@ -2661,6 +2663,295 @@ def check_price_alerts():
 
 
 # ============================================================
+# 交易计划 API（v3.7 P0优化新增）
+# ============================================================
+
+@position_bp.route("/api/trade-plans", methods=["GET"])
+@login_required
+def list_trade_plans():
+    """获取交易计划列表"""
+    user_id = get_current_user_id()
+    status = request.args.get("status")
+    plans = get_trade_plans(user_id=user_id, status=status)
+    return jsonify(plans)
+
+
+@position_bp.route("/api/trade-plans", methods=["POST"])
+@login_required
+def create_new_trade_plan():
+    """创建交易计划"""
+    user_id = get_current_user_id()
+    body = request.get_json()
+    if not body or not body.get("ts_code") or not body.get("plan_type"):
+        return jsonify({"error": "缺少必填字段: ts_code, plan_type"}), 400
+    plan_type = body["plan_type"]
+    if plan_type not in ("buy", "sell"):
+        return jsonify({"error": "plan_type 必须是 buy 或 sell"}), 400
+    plan_id = create_trade_plan(
+        user_id=user_id,
+        ts_code=body["ts_code"].upper(),
+        name=body.get("name", ""),
+        plan_type=plan_type,
+        target_price=float(body["target_price"]) if body.get("target_price") else None,
+        trigger_price=float(body["trigger_price"]) if body.get("trigger_price") else None,
+        planned_volume=int(body["planned_volume"]) if body.get("planned_volume") else 0,
+        planned_amount=float(body["planned_amount"]) if body.get("planned_amount") else 0,
+        strategy=body.get("strategy", ""),
+        reason=body.get("reason", ""),
+        due_date=body.get("due_date", ""),
+    )
+    return jsonify({"message": "交易计划已创建", "id": plan_id}), 201
+
+
+@position_bp.route("/api/trade-plans/<int:plan_id>", methods=["PUT"])
+@login_required
+def update_existing_trade_plan(plan_id):
+    """更新交易计划"""
+    user_id = get_current_user_id()
+    plan = get_trade_plan(plan_id, user_id)
+    if not plan:
+        return jsonify({"error": "交易计划不存在"}), 404
+    body = request.get_json()
+    updates = {}
+    for field in ["name", "target_price", "trigger_price", "planned_volume",
+                  "planned_amount", "strategy", "reason", "status", "due_date",
+                  "executed_at", "executed_price"]:
+        if field in body:
+            val = body[field]
+            if field in ("target_price", "trigger_price", "planned_amount", "executed_price"):
+                val = float(val) if val is not None else None
+            elif field == "planned_volume":
+                val = int(val) if val is not None else 0
+            updates[field] = val
+    update_trade_plan(plan_id, user_id, **updates)
+    return jsonify({"message": "交易计划已更新"})
+
+
+@position_bp.route("/api/trade-plans/<int:plan_id>", methods=["DELETE"])
+@login_required
+def remove_trade_plan(plan_id):
+    """删除交易计划"""
+    user_id = get_current_user_id()
+    plan = get_trade_plan(plan_id, user_id)
+    if not plan:
+        return jsonify({"error": "交易计划不存在"}), 404
+    delete_trade_plan(plan_id, user_id)
+    return jsonify({"message": "交易计划已删除"})
+
+
+@position_bp.route("/api/trade-plans/<int:plan_id>/execute", methods=["POST"])
+@login_required
+def execute_trade_plan(plan_id):
+    """标记交易计划为已执行"""
+    user_id = get_current_user_id()
+    plan = get_trade_plan(plan_id, user_id)
+    if not plan:
+        return jsonify({"error": "交易计划不存在"}), 404
+    body = request.get_json() or {}
+    executed_price = float(body["executed_price"]) if body.get("executed_price") else None
+    update_trade_plan(plan_id, user_id,
+                      status="executed",
+                      executed_at=datetime.now().isoformat(),
+                      executed_price=executed_price)
+    return jsonify({"message": "交易计划已标记为执行"})
+
+
+@position_bp.route("/api/trade-plans/<int:plan_id>/cancel", methods=["POST"])
+@login_required
+def cancel_trade_plan(plan_id):
+    """取消交易计划"""
+    user_id = get_current_user_id()
+    plan = get_trade_plan(plan_id, user_id)
+    if not plan:
+        return jsonify({"error": "交易计划不存在"}), 404
+    update_trade_plan(plan_id, user_id, status="cancelled")
+    return jsonify({"message": "交易计划已取消"})
+
+
+@position_bp.route("/api/trade-plans/check")
+@login_required
+def check_trade_plan_triggers():
+    """检查交易计划的触发条件"""
+    user_id = get_current_user_id()
+    plans = get_trade_plans(user_id=user_id, status="pending")
+    triggered = []
+    for p in plans:
+        trigger_price = p.get("trigger_price")
+        if trigger_price is None:
+            continue
+        try:
+            from helpers import get_realtime_quotes
+            quotes = get_realtime_quotes([p["ts_code"]])
+            quote = quotes.get(p["ts_code"], {}) if isinstance(quotes, dict) else {}
+            if not quote:
+                if isinstance(quotes, list) and len(quotes) > 0:
+                    quote = quotes[0]
+            current_price = float(quote.get("price", 0)) if quote else 0
+            if current_price <= 0:
+                df = pro.daily(ts_code=p["ts_code"], end_date=datetime.now().strftime("%Y%m%d"), limit=1)
+                if df.empty:
+                    continue
+                current_price = float(df.iloc[-1]["close"])
+        except Exception:
+            continue
+        if p["plan_type"] == "buy" and current_price <= float(trigger_price):
+            triggered.append({
+                "plan_id": p["id"],
+                "ts_code": p["ts_code"],
+                "name": p.get("name", ""),
+                "plan_type": "buy",
+                "current_price": round(current_price, 2),
+                "trigger_price": float(trigger_price),
+                "message": f"📥 {p.get('name', p['ts_code'])} 触发买入条件：现价 ¥{current_price:.2f} ≤ 触发价 ¥{trigger_price}",
+            })
+            update_trade_plan(p["id"], user_id, status="triggered")
+        elif p["plan_type"] == "sell" and current_price >= float(trigger_price):
+            triggered.append({
+                "plan_id": p["id"],
+                "ts_code": p["ts_code"],
+                "name": p.get("name", ""),
+                "plan_type": "sell",
+                "current_price": round(current_price, 2),
+                "trigger_price": float(trigger_price),
+                "message": f"📤 {p.get('name', p['ts_code'])} 触发卖出条件：现价 ¥{current_price:.2f} ≥ 触发价 ¥{trigger_price}",
+            })
+            update_trade_plan(p["id"], user_id, status="triggered")
+    return jsonify({
+        "triggered": triggered,
+        "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total": len(triggered),
+    })
+
+
+# ============================================================
+# 价格预警 API（v3.7 P0优化新增）
+# ============================================================
+
+@position_bp.route("/api/price-alerts", methods=["GET"])
+@login_required
+def list_price_alerts():
+    """获取价格预警列表"""
+    user_id = get_current_user_id()
+    status = request.args.get("status")
+    alerts = get_price_alerts(user_id=user_id, status=status)
+    return jsonify(alerts)
+
+
+@position_bp.route("/api/price-alerts", methods=["POST"])
+@login_required
+def create_new_price_alert():
+    """创建价格预警"""
+    user_id = get_current_user_id()
+    body = request.get_json()
+    if not body or not body.get("ts_code") or not body.get("alert_type"):
+        return jsonify({"error": "缺少必填字段: ts_code, alert_type"}), 400
+    alert_type = body["alert_type"]
+    if alert_type not in ("price_change_pct", "price_break", "volume_spike"):
+        return jsonify({"error": "alert_type 必须是 price_change_pct / price_break / volume_spike"}), 400
+    direction = body.get("direction", "above")
+    if direction not in ("above", "below"):
+        return jsonify({"error": "direction 必须是 above 或 below"}), 400
+    alert_id = create_price_alert(
+        user_id=user_id,
+        ts_code=body["ts_code"].upper(),
+        name=body.get("name", ""),
+        alert_type=alert_type,
+        threshold=float(body["threshold"]) if body.get("threshold") else 0,
+        direction=direction,
+        note=body.get("note", ""),
+    )
+    return jsonify({"message": "价格预警已创建", "id": alert_id}), 201
+
+
+@position_bp.route("/api/price-alerts/<int:alert_id>", methods=["PUT"])
+@login_required
+def update_existing_price_alert(alert_id):
+    """更新价格预警（切换状态/修改阈值）"""
+    user_id = get_current_user_id()
+    body = request.get_json()
+    updates = {}
+    for field in ["name", "threshold", "direction", "status", "note"]:
+        if field in body:
+            val = body[field]
+            if field == "threshold":
+                val = float(val) if val is not None else 0
+            updates[field] = val
+    update_price_alert(alert_id, user_id, **updates)
+    return jsonify({"message": "价格预警已更新"})
+
+
+@position_bp.route("/api/price-alerts/<int:alert_id>", methods=["DELETE"])
+@login_required
+def remove_price_alert(alert_id):
+    """删除价格预警"""
+    user_id = get_current_user_id()
+    delete_price_alert(alert_id, user_id)
+    return jsonify({"message": "价格预警已删除"})
+
+
+@position_bp.route("/api/price-alerts/check")
+@login_required
+def check_price_alert_triggers():
+    """检查所有活跃价格预警的触发情况"""
+    user_id = get_current_user_id()
+    alerts = get_price_alerts(user_id=user_id, status="active")
+    triggered = []
+    for a in alerts:
+        try:
+            from helpers import get_realtime_quotes
+            quotes = get_realtime_quotes([a["ts_code"]])
+            quote = quotes.get(a["ts_code"], {}) if isinstance(quotes, dict) else {}
+            if not quote:
+                if isinstance(quotes, list) and len(quotes) > 0:
+                    quote = quotes[0]
+            current_price = float(quote.get("price", 0)) if quote else 0
+            pct_chg = float(quote.get("pct_chg", 0)) if quote else 0
+            if current_price <= 0:
+                df = pro.daily(ts_code=a["ts_code"], end_date=datetime.now().strftime("%Y%m%d"), limit=1)
+                if df.empty:
+                    continue
+                current_price = float(df.iloc[-1]["close"])
+                pct_chg = float(df.iloc[-1].get("pct_chg", 0))
+        except Exception:
+            continue
+
+        is_triggered = False
+        msg = ""
+        if a["alert_type"] == "price_change_pct":
+            if a["direction"] == "above" and pct_chg >= a["threshold"]:
+                is_triggered = True
+                msg = f"📈 {a.get('name', a['ts_code'])} 涨幅触发：+{pct_chg:.2f}% ≥ {a['threshold']}%"
+            elif a["direction"] == "below" and pct_chg <= -a["threshold"]:
+                is_triggered = True
+                msg = f"📉 {a.get('name', a['ts_code'])} 跌幅触发：{pct_chg:.2f}% ≤ -{a['threshold']}%"
+        elif a["alert_type"] == "price_break":
+            if a["direction"] == "above" and current_price >= a["threshold"]:
+                is_triggered = True
+                msg = f"📈 {a.get('name', a['ts_code'])} 价格突破：¥{current_price:.2f} ≥ ¥{a['threshold']}"
+            elif a["direction"] == "below" and current_price <= a["threshold"]:
+                is_triggered = True
+                msg = f"📉 {a.get('name', a['ts_code'])} 价格跌破：¥{current_price:.2f} ≤ ¥{a['threshold']}"
+
+        if is_triggered:
+            triggered.append({
+                "alert_id": a["id"],
+                "ts_code": a["ts_code"],
+                "name": a.get("name", ""),
+                "alert_type": a["alert_type"],
+                "current_price": round(current_price, 2),
+                "pct_chg": round(pct_chg, 2),
+                "message": msg,
+            })
+            update_price_alert(a["id"], user_id, status="triggered", last_triggered=datetime.now().isoformat())
+
+    return jsonify({
+        "triggered": triggered,
+        "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "total": len(triggered),
+    })
+
+
+# ============================================================
 # 行情数据 API
 # ============================================================
 
@@ -3150,6 +3441,20 @@ def get_summary():
     today_profit = round(sum(p["today_profit"] for p in enriched), 2)
     cash = capital.get("cash", 0)
 
+    total_assets = total_market_value + cash
+    position_ratio = round(total_market_value / total_assets * 100, 1) if total_assets > 0 else 0
+
+    # 集中度分析
+    single_ratios = [round(p["market_value"] / total_assets * 100, 1) for p in enriched if total_assets > 0]
+    max_single_ratio = max(single_ratios) if single_ratios else 0
+
+    industry_map = {}
+    for p in enriched:
+        ind = p.get("industry", "其他")
+        industry_map[ind] = industry_map.get(ind, 0) + p["market_value"]
+    industry_ratios = [round(v / total_assets * 100, 1) for v in industry_map.values()] if total_assets > 0 else []
+    max_industry_ratio = max(industry_ratios) if industry_ratios else 0
+
     summary = {
         "total_market_value": total_market_value,
         "total_cost": total_cost,
@@ -3160,7 +3465,12 @@ def get_summary():
         "last_update": datetime.now().strftime("%H:%M:%S"),
         "cash": cash,
         "initial_capital": capital.get("initial", 0),
-        "total_assets": total_market_value + cash,
+        "total_assets": total_assets,
+        # v3.7 P0: 仓位分析
+        "position_ratio": position_ratio,
+        "max_single_ratio": max_single_ratio,
+        "max_industry_ratio": max_industry_ratio,
+        "position_count": len(enriched),
     }
 
     initial_capital = capital.get("initial", 0)
@@ -3170,3 +3480,67 @@ def get_summary():
         summary["total_profit_pct"] = round(total_profit / total_cost * 100, 2)
 
     return jsonify(summary)
+
+
+@position_bp.route("/api/position-advice")
+@login_required
+def get_position_advice_api():
+    """仓位管理建议（基于市场评分和当前仓位）"""
+    user_id = get_current_user_id()
+    positions = _build_position_list(user_id)
+    enriched = enrich_positions(positions)
+    capital = get_capital(user_id)
+
+    total_market_value = sum(p["market_value"] for p in enriched)
+    total_assets = total_market_value + capital.get("cash", 0)
+    current_ratio = round(total_market_value / total_assets * 100, 1) if total_assets > 0 else 0
+
+    # 获取市场评分
+    market_score = 50
+    try:
+        from helpers import get_market_score
+        market_score = get_market_score()
+    except Exception:
+        pass
+
+    # 建议仓位（基于市场评分）
+    if market_score >= 70:
+        suggested_min, suggested_max = 70, 100
+        advice = "市场强势，建议高仓位运行"
+    elif market_score >= 50:
+        suggested_min, suggested_max = 50, 70
+        advice = "市场震荡，建议中等仓位"
+    elif market_score >= 30:
+        suggested_min, suggested_max = 30, 50
+        advice = "市场偏弱，建议控制仓位"
+    else:
+        suggested_min, suggested_max = 0, 30
+        advice = "市场弱势，建议轻仓或空仓"
+
+    # 集中度风险
+    risks = []
+    single_ratios = [round(p["market_value"] / total_assets * 100, 1) for p in enriched if total_assets > 0]
+    if single_ratios and max(single_ratios) > 30:
+        risks.append(f"单股集中度 {max(single_ratios)}% 过高，建议分散持仓")
+    industry_map = {}
+    for p in enriched:
+        ind = p.get("industry", "其他")
+        industry_map[ind] = industry_map.get(ind, 0) + p["market_value"]
+    industry_ratios = [round(v / total_assets * 100, 1) for v in industry_map.values()] if total_assets > 0 else []
+    if industry_ratios and max(industry_ratios) > 50:
+        risks.append(f"行业集中度 {max(industry_ratios)}% 过高，注意行业风险")
+    if current_ratio > suggested_max:
+        risks.append(f"当前仓位 {current_ratio}% 高于建议区间，可考虑减仓")
+    elif current_ratio < suggested_min and current_ratio > 0:
+        risks.append(f"当前仓位 {current_ratio}% 低于建议区间，可适当加仓")
+
+    return jsonify({
+        "current_ratio": current_ratio,
+        "suggested_min": suggested_min,
+        "suggested_max": suggested_max,
+        "market_score": market_score,
+        "advice": advice,
+        "risks": risks,
+        "position_count": len(enriched),
+    })
+

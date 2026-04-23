@@ -31,6 +31,13 @@
                     <span>{{indexSource==='sina'?'新浪实时':indexSource==='eastmoney'?'东财实时':indexSource==='tushare'?'Tushare':'--'}}</span>
                 </div>
                 <!-- 更多操作下拉菜单（低频操作） -->
+                <!-- 预警中心 -->
+                <div class="header-dropdown" style="position:relative">
+                    <button class="btn" @click="showAlertCenter=true;checkAllAlerts()" title="预警中心" style="position:relative">
+                        🔔
+                        <span v-if="alertNotifications.length>0" style="position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;font-size:10px;padding:1px 5px;border-radius:10px;font-weight:600">{{alertNotifications.length}}</span>
+                    </button>
+                </div>
                 <div class="header-dropdown" style="position:relative">
                     <button class="btn" @click="showHeaderMenu=!showHeaderMenu" title="更多">
                         ☰
@@ -118,6 +125,7 @@
         <!-- 暂时隐藏：策略、市场（待完善后启用） -->
         <!-- <button :class="['tab-btn',activeTab==='strategy'?'active':'']" @click="switchToStrategy">🎯 策略</button> -->
         <button :class="['tab-btn',activeTab==='watch'?'active':'']" @click="switchToWatch">👀 自选<span class="tab-badge" v-if="watchListCount>0">{{watchListCount}}</span></button>
+        <button :class="['tab-btn',activeTab==='tradeplan'?'active':'']" @click="switchToTradePlan">🎯 交易计划<span class="tab-badge" v-if="tradePlans.filter(p=>p.status==='pending'||p.status==='triggered').length>0">{{tradePlans.filter(p=>p.status==='pending'||p.status==='triggered').length}}</span></button>
         <!-- 暂时隐藏：对比、统计、市场 -->
         <!-- <button :class="['tab-btn',activeTab==='compare'?'active':'']" @click="switchToCompare">⚖️ 对比</button> -->
         <!-- <button :class="['tab-btn',activeTab==='analysis'?'active':'']" @click="switchToAnalysis">📊 统计</button> -->
@@ -143,9 +151,15 @@
                 <div class="sub">{{summary.is_trade_time?'⏳ 交易中':'✅ 已收盘'}} · 更新于 {{summary.last_update}}</div>
             </div>
             <div class="summary-card" style="position:relative">
-                <div class="label">🏦 持仓 / 现金</div>
-                <div class="value text-blue">{{summary.position_count}} <span style="font-size:14px;color:var(--text-secondary)">只</span></div>
-                <div class="sub">可用现金 ¥{{formatNum(summary.cash)}}</div>
+                <div class="label">🏦 仓位分析</div>
+                <div class="value text-blue">{{summary.position_ratio||0}}% <span style="font-size:14px;color:var(--text-secondary)">持仓</span></div>
+                <div class="sub">
+                    <span v-if="positionAdvice">建议 {{positionAdvice.suggested_min}}-{{positionAdvice.suggested_max}}%</span>
+                    <span v-else>{{summary.position_count}}只 · 现金 ¥{{formatNum(summary.cash)}}</span>
+                </div>
+                <div v-if="positionAdvice && positionAdvice.risks.length>0" style="position:absolute;top:8px;right:8px;cursor:pointer" @click="showPositionAdviceDetail=true" title="查看风险提示">
+                    <span style="background:var(--yellow);color:#000;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:600">⚠️ {{positionAdvice.risks.length}}</span>
+                </div>
                 <button class="btn btn-xs" @click="openCapitalModal" style="position:absolute;top:12px;right:12px;font-size:12px;padding:4px 8px;background:var(--bg-hover);border:1px solid var(--border);color:var(--text-secondary)" title="资金设置">💰 设置</button>
             </div>
         </div>
@@ -1433,6 +1447,141 @@
     </template>
 
     <div v-if="watchStrategyError" style="color:var(--yellow);font-size:13px;margin-bottom:10px">⚠️ {{watchStrategyError}}</div>
+</div>
+</div>
+
+<!-- Tab: 交易计划 (v3.7 P0) -->
+<div :class="['tab-content',activeTab==='tradeplan'?'active':'']">
+    <!-- 顶部概览 -->
+    <div class="stats-grid" v-if="tradePlans.length>0">
+        <div class="stat-card">
+            <div class="stat-label">🎯 计划中</div>
+            <div class="stat-value text-blue">{{tradePlans.filter(p=>p.status==='pending').length}}</div>
+            <div class="stat-sub">待触发</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">🔔 已触发</div>
+            <div class="stat-value text-yellow">{{tradePlans.filter(p=>p.status==='triggered').length}}</div>
+            <div class="stat-sub">需关注</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">✅ 已执行</div>
+            <div class="stat-value text-green">{{tradePlans.filter(p=>p.status==='executed').length}}</div>
+            <div class="stat-sub">今日 {{tradePlans.filter(p=>p.status==='executed' && p.executed_at && p.executed_at.startsWith(new Date().toISOString().slice(0,10))).length}}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📊 总计</div>
+            <div class="stat-value">{{tradePlans.length}}</div>
+            <div class="stat-sub">全部计划</div>
+        </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="toolbar" style="flex-wrap:wrap;gap:12px">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-primary" @click="openTradePlanModal()">＋ 新建计划</button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                <span style="font-size:12px;color:var(--text-muted)">筛选:</span>
+                <button :class="['btn','btn-xs',tradePlanFilter==='all'?'btn-primary':'']" @click="tradePlanFilter='all'" style="font-size:12px">全部</button>
+                <button :class="['btn','btn-xs',tradePlanFilter==='pending'?'btn-primary':'']" @click="tradePlanFilter='pending'" style="font-size:12px">⏳ 待触发</button>
+                <button :class="['btn','btn-xs',tradePlanFilter==='triggered'?'btn-primary':'']" @click="tradePlanFilter='triggered'" style="font-size:12px">🔔 已触发</button>
+                <button :class="['btn','btn-xs',tradePlanFilter==='executed'?'btn-primary':'']" @click="tradePlanFilter='executed'" style="font-size:12px">✅ 已执行</button>
+                <button :class="['btn','btn-xs',tradePlanFilter==='cancelled'?'btn-primary':'']" @click="tradePlanFilter='cancelled'" style="font-size:12px">❌ 已取消</button>
+            </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-left:auto">
+            <div class="search-box"><input v-model="tradePlanSearch" placeholder="搜索股票..." style="width:140px"></div>
+            <button class="btn btn-xs" @click="checkTradePlanAlerts" title="检查触发条件">🔔</button>
+            <button class="btn btn-xs" @click="loadTradePlans" :disabled="tradePlanLoading" title="刷新">🔄</button>
+        </div>
+    </div>
+
+    <!-- 计划列表 -->
+    <div class="table-wrapper" v-if="filteredTradePlans.length>0">
+        <table style="font-size:13px">
+            <thead>
+                <tr>
+                    <th>股票</th>
+                    <th>类型</th>
+                    <th style="text-align:right">目标价</th>
+                    <th style="text-align:right">触发价</th>
+                    <th style="text-align:right">数量</th>
+                    <th>策略</th>
+                    <th>状态</th>
+                    <th>到期日</th>
+                    <th style="text-align:center">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr v-for="p in filteredTradePlans" :key="p.id" :style="p.status==='triggered'?'background:rgba(245,158,11,0.08)':''">
+                    <td>
+                        <span class="stock-name" style="font-weight:600">{{p.name||p.ts_code}}</span>
+                        <span class="stock-code" style="font-size:11px;margin-left:4px">{{p.ts_code}}</span>
+                    </td>
+                    <td>
+                        <span :class="tradePlanTypeClass[p.plan_type]" style="font-weight:600;font-size:12px">{{tradePlanTypeText[p.plan_type]}}</span>
+                    </td>
+                    <td style="text-align:right" class="num">{{p.target_price?'¥'+p.target_price:'-'}}</td>
+                    <td style="text-align:right" class="num">{{p.trigger_price?'¥'+p.trigger_price:'-'}}</td>
+                    <td style="text-align:right" class="num">{{p.planned_volume||'-'}}</td>
+                    <td style="color:var(--text-muted);font-size:12px">{{p.strategy||'-'}}</td>
+                    <td>
+                        <span :class="['badge',tradePlanStatusClass[p.status]]" style="font-size:11px">{{tradePlanStatusText[p.status]}}</span>
+                    </td>
+                    <td style="color:var(--text-muted);font-size:12px">{{p.due_date||'-'}}</td>
+                    <td style="text-align:center">
+                        <button v-if="p.status==='pending'" class="btn btn-xs" @click="doExecuteTradePlan(p)" title="标记执行" style="background:rgba(34,197,94,0.15);color:#22c55e;border:none">✓</button>
+                        <button v-if="p.status==='pending'" class="btn btn-xs" @click="doCancelTradePlan(p)" title="取消" style="background:rgba(148,163,184,0.15);color:#94a3b8;border:none;margin-left:4px">✕</button>
+                        <button class="btn btn-xs" @click="openTradePlanModal(p)" title="编辑" style="margin-left:4px">✎</button>
+                        <button class="btn btn-xs btn-danger" @click="doDeleteTradePlan(p)" title="删除" style="margin-left:4px">🗑</button>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 空状态 -->
+    <div class="empty-state" v-if="filteredTradePlans.length===0 && !tradePlanLoading">
+        <div class="icon">🎯</div>
+        <p>暂无交易计划，点击新建计划开始布局</p>
+        <button class="btn btn-primary" @click="openTradePlanModal()">＋ 新建计划</button>
+    </div>
+</div>
+
+<!-- Trade Plan Modal -->
+<div class="modal-overlay" v-if="tradePlanModal" @click.self="tradePlanModal=false">
+<div class="modal" style="max-width:520px">
+    <h2>{{tradePlanEditing?'✎ 编辑':'＋ 新建'}}交易计划</h2>
+    <div class="form-group" style="position:relative">
+        <label>股票代码 / 名称 <span style="color:var(--red)">*</span></label>
+        <input v-model="tradePlanForm.ts_code" placeholder="输入代码或名称搜索..." @input="searchTradePlanStock" @focus="searchTradePlanStock" autocomplete="off">
+        <div class="search-dropdown" v-if="tradePlanSearchResults.length>0">
+            <div class="search-item" v-for="s in tradePlanSearchResults" :key="s.ts_code" @click="selectTradePlanStock(s)"><span class="name">{{s.name}}</span><span class="code">{{s.ts_code}}</span></div>
+        </div>
+    </div>
+    <div class="form-group">
+        <label>计划类型</label>
+        <div style="display:flex;gap:10px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 16px;background:var(--bg-card);border-radius:8px;border:2px solid" :style="tradePlanForm.plan_type==='buy'?{borderColor:'#ef4444'}:{borderColor:'var(--border)'}">
+                <input type="radio" v-model="tradePlanForm.plan_type" value="buy" style="display:none"> <span style="color:#ef4444;font-weight:600">📥 买入</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 16px;background:var(--bg-card);border-radius:8px;border:2px solid" :style="tradePlanForm.plan_type==='sell'?{borderColor:'#22c55e'}:{borderColor:'var(--border)'}">
+                <input type="radio" v-model="tradePlanForm.plan_type" value="sell" style="display:none"> <span style="color:#22c55e;font-weight:600">📤 卖出</span>
+            </label>
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-group"><label>目标价（可选）</label><input v-model="tradePlanForm.target_price" type="number" step="0.01" placeholder="期望成交价格"></div>
+        <div class="form-group"><label>触发价（条件单）</label><input v-model="tradePlanForm.trigger_price" type="number" step="0.01" placeholder="达到此价格时提醒"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-group"><label>计划数量</label><input v-model="tradePlanForm.planned_volume" type="number" placeholder="100"></div>
+        <div class="form-group"><label>计划金额（可选）</label><input v-model="tradePlanForm.planned_amount" type="number" step="0.01" placeholder=""></div>
+    </div>
+    <div class="form-group"><label>关联策略（可选）</label><input v-model="tradePlanForm.strategy" placeholder="例如：趋势突破、主升浪"></div>
+    <div class="form-group"><label>计划理由（可选）</label><textarea v-model="tradePlanForm.reason" placeholder="为什么做这笔交易..." rows="2"></textarea></div>
+    <div class="form-group"><label>截止日期（可选）</label><input v-model="tradePlanForm.due_date" type="date"></div>
+    <div class="form-actions"><button class="btn" @click="tradePlanModal=false">取消</button><button class="btn btn-primary" @click="submitTradePlan">保存</button></div>
 </div>
 </div>
 
@@ -2771,6 +2920,99 @@
 </div>
 </div>
 
+<!-- Position Advice Detail Modal -->
+<div class="modal-overlay" v-if="showPositionAdviceDetail" @click.self="showPositionAdviceDetail=false">
+<div class="modal" style="max-width:480px">
+    <h2>🏦 仓位分析详情</h2>
+    <div v-if="positionAdvice">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+            <div style="padding:12px;background:var(--bg-card);border-radius:8px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted)">当前仓位</div>
+                <div style="font-size:24px;font-weight:700" :class="positionAdvice.current_ratio>positionAdvice.suggested_max?'text-red':positionAdvice.current_ratio<positionAdvice.suggested_min?'text-yellow':'text-green'">{{positionAdvice.current_ratio}}%</div>
+            </div>
+            <div style="padding:12px;background:var(--bg-card);border-radius:8px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted)">建议仓位</div>
+                <div style="font-size:24px;font-weight:700;color:var(--blue)">{{positionAdvice.suggested_min}}-{{positionAdvice.suggested_max}}%</div>
+            </div>
+        </div>
+        <div style="padding:12px;background:var(--bg-card);border-radius:8px;margin-bottom:14px">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 市场评分 {{positionAdvice.market_score}}/100</div>
+            <div style="font-size:13px;color:var(--text-secondary)">{{positionAdvice.advice}}</div>
+        </div>
+        <div v-if="positionAdvice.risks.length>0" style="padding:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;margin-bottom:14px">
+            <div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:8px">⚠️ 风险提示</div>
+            <div v-for="(risk,i) in positionAdvice.risks" :key="i" style="font-size:12px;color:var(--text-secondary);padding:4px 0">• {{risk}}</div>
+        </div>
+        <div v-else style="padding:12px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;margin-bottom:14px">
+            <div style="font-size:13px;color:#22c55e">✅ 暂无仓位风险</div>
+        </div>
+    </div>
+    <div v-else style="text-align:center;padding:30px;color:var(--text-muted)">加载中...</div>
+    <div class="form-actions"><button class="btn" @click="showPositionAdviceDetail=false">关闭</button></div>
+</div>
+</div>
+
+<!-- Alert Center Modal -->
+<div class="modal-overlay" v-if="showAlertCenter" @click.self="showAlertCenter=false">
+<div class="modal" style="max-width:560px">
+    <h2>🔔 预警中心</h2>
+    <div style="display:flex;gap:10px;margin-bottom:14px">
+        <button class="btn btn-xs btn-primary" @click="checkAllAlerts" :disabled="alertCenterLoading">{{alertCenterLoading?'检查中...':'🔍 一键检查'}}</button>
+        <button class="btn btn-xs" @click="priceAlertModal=true;showAlertCenter=false">＋ 添加预警</button>
+        <button class="btn btn-xs" @click="alertNotifications=[]" style="margin-left:auto">清除通知</button>
+    </div>
+    <div v-if="alertNotifications.length>0" style="max-height:400px;overflow-y:auto">
+        <div v-for="(n,i) in alertNotifications" :key="i" style="padding:10px 12px;background:var(--bg-card);border-radius:8px;margin-bottom:8px;border-left:3px solid var(--yellow)">
+            <div style="font-size:13px;font-weight:600">{{n.message||n.type}}</div>
+            <div v-if="n.current_price" style="font-size:12px;color:var(--text-muted);margin-top:4px">现价: ¥{{n.current_price}} <span v-if="n.trigger_price">| 触发价: ¥{{n.trigger_price}}</span></div>
+        </div>
+    </div>
+    <div v-else-if="!alertCenterLoading" style="text-align:center;padding:30px;color:var(--text-muted)">
+        <div style="font-size:32px;margin-bottom:8px">🔕</div>
+        <div style="font-size:13px">暂无触发预警</div>
+        <div style="font-size:12px;margin-top:4px">点击"一键检查"扫描所有预警规则</div>
+    </div>
+    <div v-if="alertCenterLoading" style="text-align:center;padding:30px;color:var(--text-muted)">⏳ 正在检查预警...</div>
+    <div class="form-actions"><button class="btn" @click="showAlertCenter=false">关闭</button></div>
+</div>
+</div>
+
+<!-- Price Alert Modal -->
+<div class="modal-overlay" v-if="priceAlertModal" @click.self="priceAlertModal=false">
+<div class="modal" style="max-width:460px">
+    <h2>＋ 添加价格预警</h2>
+    <div class="form-group" style="position:relative">
+        <label>股票代码 / 名称 <span style="color:var(--red)">*</span></label>
+        <input v-model="priceAlertForm.ts_code" placeholder="输入代码或名称搜索..." @input="searchPriceAlertStock" @focus="searchPriceAlertStock" autocomplete="off">
+        <div class="search-dropdown" v-if="priceAlertSearchResults.length>0">
+            <div class="search-item" v-for="s in priceAlertSearchResults" :key="s.ts_code" @click="selectPriceAlertStock(s)"><span class="name">{{s.name}}</span><span class="code">{{s.ts_code}}</span></div>
+        </div>
+    </div>
+    <div class="form-group">
+        <label>预警类型</label>
+        <select v-model="priceAlertForm.alert_type" style="width:100%;padding:8px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)">
+            <option value="price_change_pct">📊 涨跌幅（%）</option>
+            <option value="price_break">💰 价格突破（元）</option>
+        </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-group">
+            <label>方向</label>
+            <select v-model="priceAlertForm.direction" style="width:100%;padding:8px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)">
+                <option value="above">📈 高于/上涨</option>
+                <option value="below">📉 低于/下跌</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>阈值 <span style="color:var(--text-muted)">{{priceAlertForm.alert_type==='price_change_pct'?'%':'元'}}</span></label>
+            <input v-model="priceAlertForm.threshold" type="number" step="0.01" placeholder="5">
+        </div>
+    </div>
+    <div class="form-group"><label>备注（可选）</label><input v-model="priceAlertForm.note" placeholder="预警原因..."></div>
+    <div class="form-actions"><button class="btn" @click="priceAlertModal=false">取消</button><button class="btn btn-primary" @click="submitPriceAlert">保存</button></div>
+</div>
+</div>
+
 </template>
 
 <script setup>
@@ -2822,6 +3064,14 @@ const showImportModal = ref(false)
 const showParamsModal = ref(false)
 const showAdviceModal = ref(false)
 const showHeaderMenu = ref(false)
+const showAlertCenter = ref(false)
+const alertCenterLoading = ref(false)
+const showPositionAdviceDetail = ref(false)
+const alertNotifications = ref([])
+const priceAlertModal = ref(false)
+const priceAlertForm = ref({ts_code:'',name:'',alert_type:'price_change_pct',threshold:5,direction:'above',note:''})
+const priceAlertSearchResults = ref([])
+const priceAlerts = ref([])
 const showTradeDetailModal = ref(false)
 const editingPosition = ref(null)
 const detailPosition = ref(null)
@@ -3041,6 +3291,48 @@ onMounted(() => {
 onUnmounted(() => {
   console.log('App unmounted')
 })
+
+// === Price Alert Functions (v3.7 P0) ===
+let priceAlertSearchTimer = null
+async function loadPriceAlerts() {
+  try { const r = await fetchWithAuth(`${API}/api/price-alerts`); const d = await r.json(); priceAlerts.value = d || [] } catch (e) { priceAlerts.value = [] }
+}
+async function searchPriceAlertStock() {
+  clearTimeout(priceAlertSearchTimer)
+  const kw = priceAlertForm.value.ts_code.trim()
+  if (kw.length < 1) { priceAlertSearchResults.value = []; return }
+  priceAlertSearchTimer = setTimeout(async () => {
+    try { const r = await fetchWithAuth(`${API}/api/search?keyword=${encodeURIComponent(kw)}`); const d = await r.json(); priceAlertSearchResults.value = d.results || [] } catch (e) { priceAlertSearchResults.value = [] }
+  }, 300)
+}
+function selectPriceAlertStock(s) { priceAlertForm.value.ts_code = s.ts_code; priceAlertForm.value.name = s.name; priceAlertSearchResults.value = [] }
+async function submitPriceAlert() {
+  const f = priceAlertForm.value
+  if (!f.ts_code.trim()) { showToast('请输入股票代码'); return }
+  try {
+    const body = { ...f, ts_code: f.ts_code.trim().toUpperCase(), threshold: parseFloat(f.threshold) || 0 }
+    const r = await fetchWithAuth(`${API}/api/price-alerts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const d = await r.json(); showToast(d.message || '已创建')
+    priceAlertModal.value = false; priceAlertForm.value = { ts_code: '', name: '', alert_type: 'price_change_pct', threshold: 5, direction: 'above', note: '' }
+    await loadPriceAlerts()
+  } catch (e) { showToast('创建失败') }
+}
+async function doDeletePriceAlert(alert) {
+  if (!confirm(`确认删除 ${alert.name || alert.ts_code} 的价格预警？`)) return
+  try { const r = await fetchWithAuth(`${API}/api/price-alerts/${alert.id}`, { method: 'DELETE' }); const d = await r.json(); showToast(d.message); await loadPriceAlerts() } catch (e) { showToast('删除失败') }
+}
+async function checkAllAlerts() {
+  alertCenterLoading.value = true
+  const notifications = []
+  try { const r1 = await fetchWithAuth(`${API}/api/alerts/check`); const d1 = await r1.json(); if (d1.triggered) notifications.push(...d1.triggered) } catch (e) {}
+  try { const r2 = await fetchWithAuth(`${API}/api/trade-plans/check`); const d2 = await r2.json(); if (d2.triggered) notifications.push(...d2.triggered) } catch (e) {}
+  try { const r3 = await fetchWithAuth(`${API}/api/price-alerts/check`); const d3 = await r3.json(); if (d3.triggered) notifications.push(...d3.triggered) } catch (e) {}
+  alertNotifications.value = notifications; alertCenterLoading.value = false
+  if (notifications.length > 0) { notifications.forEach(n => showToast(n.message)) }
+  return notifications.length
+}
+const alertTypeText = { 'price_change_pct': '涨跌幅', 'price_break': '价格突破', 'volume_spike': '成交量异动' }
+const alertDirectionText = { 'above': '高于', 'below': '低于' }
 
 
 </script>

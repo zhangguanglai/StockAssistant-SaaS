@@ -533,6 +533,7 @@ setup(){
     const showStrategyDetail=ref(false); // 策略详情弹窗
     const backtestDays=ref(30),backtestHold=ref(5),backtestLoading=ref(false),backtestData=ref(null);
     const alertCheckLoading=ref(false),alertCheckResult=ref(null);
+    const positionAdvice=ref(null);const showPositionAdviceDetail=ref(false);
     const alertAutoMode=ref(false),alertAutoTimer=ref(null);
     // K-line
     const klineData=ref(null),klineLoading=ref(false);
@@ -561,8 +562,9 @@ setup(){
     async function fetchIndex(){try{const r=await fetchWithAuth(`${API}/api/index`);const d=await r.json();indexData.value=d;const codes=Object.keys(d);if(codes.length>0){const first=d[codes[0]];indexSource.value=first._source||'';if(first.time){const t=first.time;indexTime.value=t.includes(' ')?t.split(' ')[1]:t}else{indexTime.value=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}}else{indexSource.value='';indexTime.value=''}}catch(e){}}
     async function fetchTradeLog(){try{const r=await fetchWithAuth(`${API}/api/trade-log`);const d=await r.json();tradeLogs.value=d.trades||[];tradeLogStats.value=d.stats||null}catch(e){}}
     async function fetchCapital(){try{const r=await fetchWithAuth(`${API}/api/capital`);const d=await r.json();capitalForm.value=d.capital||{initial:0,cash:0}}catch(e){}}
+    async function loadPositionAdvice(){try{const r=await fetchWithAuth(`${API}/api/position-advice`);const d=await r.json();positionAdvice.value=d;}catch(e){positionAdvice.value=null;}}
 
-    async function refreshData(){await Promise.all([fetchData(),fetchIndex()]);if(activeTab.value==='tradelog')await fetchTradeLog();showToast('数据已刷新')}
+    async function refreshData(){await Promise.all([fetchData(),fetchIndex()]);if(activeTab.value==='tradelog')await fetchTradeLog();await loadPositionAdvice();showToast('数据已刷新')}
 
     let searchTimer=null;
     async function searchStock(){clearTimeout(searchTimer);const kw=addForm.value.ts_code.trim();if(kw.length<1){searchResults.value=[];return}searchTimer=setTimeout(async()=>{try{const r=await fetchWithAuth(`${API}/api/search?keyword=${encodeURIComponent(kw)}`);const d=await r.json();searchResults.value=d.results||[]}catch(e){searchResults.value=[]}},300)}
@@ -1591,6 +1593,46 @@ setup(){
     // Import/Export
     function handleExport(){fetchWithAuth(`${API}/api/export`).then(r=>r.json()).then(data=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`portfolio_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);showToast('导出成功')})}
 
+    // === Trade Plan Functions (v3.7 P0优化) ===
+    const tradePlans=ref([]);const tradePlanLoading=ref(false);const tradePlanFilter=ref('all');
+    const tradePlanModal=ref(false);const tradePlanEditing=ref(null);
+    const tradePlanForm=ref({ts_code:'',name:'',plan_type:'buy',target_price:'',trigger_price:'',planned_volume:100,planned_amount:'',strategy:'',reason:'',due_date:''});
+    const tradePlanSearch=ref('');const tradePlanSearchResults=ref([]);let tradePlanSearchTimer=null;
+    const filteredTradePlans=computed(()=>{
+        let list=tradePlans.value||[];
+        if(tradePlanFilter.value!=='all')list=list.filter(p=>p.status===tradePlanFilter.value);
+        if(tradePlanSearch.value.trim()){const kw=tradePlanSearch.value.trim().toLowerCase();list=list.filter(p=>(p.name||'').toLowerCase().includes(kw)||p.ts_code.toLowerCase().includes(kw)||(p.strategy||'').toLowerCase().includes(kw));}
+        return list;
+    });
+    function switchToTradePlan(){activeTab.value='tradeplan';loadTradePlans();}
+    async function loadTradePlans(){tradePlanLoading.value=true;try{const r=await fetchWithAuth(`${API}/api/trade-plans`);const d=await r.json();tradePlans.value=d||[];}catch(e){tradePlans.value=[];}finally{tradePlanLoading.value=false;}}
+    async function searchTradePlanStock(){clearTimeout(tradePlanSearchTimer);const kw=tradePlanForm.value.ts_code.trim();if(kw.length<1){tradePlanSearchResults.value=[];return;}tradePlanSearchTimer=setTimeout(async()=>{try{const r=await fetchWithAuth(`${API}/api/search?keyword=${encodeURIComponent(kw)}`);const d=await r.json();tradePlanSearchResults.value=d.results||[];}catch(e){tradePlanSearchResults.value=[];}},300);}
+    function selectTradePlanStock(s){tradePlanForm.value.ts_code=s.ts_code;tradePlanForm.value.name=s.name;tradePlanSearchResults.value=[];}
+    async function submitTradePlan(){const f=tradePlanForm.value;if(!f.ts_code.trim()){showToast('请输入股票代码');return;}try{const body={...f,ts_code:f.ts_code.trim().toUpperCase(),target_price:parseFloat(f.target_price)||null,trigger_price:parseFloat(f.trigger_price)||null,planned_volume:parseInt(f.planned_volume)||0,planned_amount:parseFloat(f.planned_amount)||null};if(tradePlanEditing.value){const r=await fetchWithAuth(`${API}/api/trade-plans/${tradePlanEditing.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();showToast(d.message||'已更新');}else{const r=await fetchWithAuth(`${API}/api/trade-plans`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();showToast(d.message||'已创建');}tradePlanModal.value=false;tradePlanEditing.value=null;tradePlanForm.value={ts_code:'',name:'',plan_type:'buy',target_price:'',trigger_price:'',planned_volume:100,planned_amount:'',strategy:'',reason:'',due_date:''};await loadTradePlans();}catch(e){showToast('保存失败');}}
+    function openTradePlanModal(plan){if(plan){tradePlanEditing.value=plan;tradePlanForm.value={ts_code:plan.ts_code,name:plan.name||'',plan_type:plan.plan_type,target_price:plan.target_price||'',trigger_price:plan.trigger_price||'',planned_volume:plan.planned_volume||100,planned_amount:plan.planned_amount||'',strategy:plan.strategy||'',reason:plan.reason||'',due_date:plan.due_date||''};}else{tradePlanEditing.value=null;tradePlanForm.value={ts_code:'',name:'',plan_type:'buy',target_price:'',trigger_price:'',planned_volume:100,planned_amount:'',strategy:'',reason:'',due_date:''};}tradePlanModal.value=true;}
+    async function doDeleteTradePlan(plan){if(!confirm(`确认删除 ${plan.name||plan.ts_code} 的交易计划？`))return;try{const r=await fetchWithAuth(`${API}/api/trade-plans/${plan.id}`,{method:'DELETE'});const d=await r.json();showToast(d.message);await loadTradePlans();}catch(e){showToast('删除失败');}}
+    async function doExecuteTradePlan(plan){const price=prompt(`请输入 ${plan.name||plan.ts_code} 的实际执行价格：`,plan.target_price||'');if(price===null)return;try{const r=await fetchWithAuth(`${API}/api/trade-plans/${plan.id}/execute`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({executed_price:parseFloat(price)||null})});const d=await r.json();showToast(d.message);await loadTradePlans();}catch(e){showToast('操作失败');}}
+    async function doCancelTradePlan(plan){if(!confirm(`确认取消 ${plan.name||plan.ts_code} 的交易计划？`))return;try{const r=await fetchWithAuth(`${API}/api/trade-plans/${plan.id}/cancel`,{method:'POST'});const d=await r.json();showToast(d.message);await loadTradePlans();}catch(e){showToast('操作失败');}}
+    async function checkTradePlanAlerts(){try{const r=await fetchWithAuth(`${API}/api/trade-plans/check`);const d=await r.json();if(d.triggered&&d.triggered.length>0){d.triggered.forEach(t=>showToast(t.message));await loadTradePlans();}}catch(e){}}
+    const tradePlanStatusText={'pending':'待触发','triggered':'已触发','executed':'已执行','cancelled':'已取消','expired':'已过期'};
+    const tradePlanStatusClass={'pending':'badge-info','triggered':'badge-warning','executed':'badge-success','cancelled':'badge-muted','expired':'badge-muted'};
+    const tradePlanTypeText={'buy':'买入','sell':'卖出'};
+    const tradePlanTypeClass={'buy':'text-red','sell':'text-green'};
+
+    // === Price Alert Functions (v3.7 P0优化) ===
+    const priceAlerts=ref([]);const priceAlertLoading=ref(false);const priceAlertModal=ref(false);
+    const priceAlertForm=ref({ts_code:'',name:'',alert_type:'price_change_pct',threshold:5,direction:'above',note:''});
+    const priceAlertSearch=ref('');const priceAlertSearchResults=ref([]);let priceAlertSearchTimer=null;
+    const alertNotifications=ref([]);const showAlertCenter=ref(false);const alertCenterLoading=ref(false);
+    async function loadPriceAlerts(){priceAlertLoading.value=true;try{const r=await fetchWithAuth(`${API}/api/price-alerts`);const d=await r.json();priceAlerts.value=d||[];}catch(e){priceAlerts.value=[];}finally{priceAlertLoading.value=false;}}
+    async function searchPriceAlertStock(){clearTimeout(priceAlertSearchTimer);const kw=priceAlertForm.value.ts_code.trim();if(kw.length<1){priceAlertSearchResults.value=[];return;}priceAlertSearchTimer=setTimeout(async()=>{try{const r=await fetchWithAuth(`${API}/api/search?keyword=${encodeURIComponent(kw)}`);const d=await r.json();priceAlertSearchResults.value=d.results||[];}catch(e){priceAlertSearchResults.value=[];}},300);}
+    function selectPriceAlertStock(s){priceAlertForm.value.ts_code=s.ts_code;priceAlertForm.value.name=s.name;priceAlertSearchResults.value=[];}
+    async function submitPriceAlert(){const f=priceAlertForm.value;if(!f.ts_code.trim()){showToast('请输入股票代码');return;}try{const body={...f,ts_code:f.ts_code.trim().toUpperCase(),threshold:parseFloat(f.threshold)||0};const r=await fetchWithAuth(`${API}/api/price-alerts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();showToast(d.message||'已创建');priceAlertModal.value=false;priceAlertForm.value={ts_code:'',name:'',alert_type:'price_change_pct',threshold:5,direction:'above',note:''};await loadPriceAlerts();}catch(e){showToast('创建失败');}}
+    async function doDeletePriceAlert(alert){if(!confirm(`确认删除 ${alert.name||alert.ts_code} 的价格预警？`))return;try{const r=await fetchWithAuth(`${API}/api/price-alerts/${alert.id}`,{method:'DELETE'});const d=await r.json();showToast(d.message);await loadPriceAlerts();}catch(e){showToast('删除失败');}}
+    async function checkAllAlerts(){alertCenterLoading.value=true;const notifications=[];try{const r1=await fetchWithAuth(`${API}/api/alerts/check`);const d1=await r1.json();if(d1.triggered)notifications.push(...d1.triggered);}catch(e){}try{const r2=await fetchWithAuth(`${API}/api/trade-plans/check`);const d2=await r2.json();if(d2.triggered)notifications.push(...d2.triggered);}catch(e){}try{const r3=await fetchWithAuth(`${API}/api/price-alerts/check`);const d3=await r3.json();if(d3.triggered)notifications.push(...d3.triggered);}catch(e){}alertNotifications.value=notifications;alertCenterLoading.value=false;if(notifications.length>0){notifications.forEach(n=>showToast(n.message));}return notifications.length;}
+    const alertTypeText={'price_change_pct':'涨跌幅','price_break':'价格突破','volume_spike':'成交量异动'};
+    const alertDirectionText={'above':'高于','below':'低于'};
+
     // === Compare Functions ===
     const compareCodes=ref([]),compareInput=ref(''),compareDays=ref(60);
     const compareData=ref(null),compareLoading=ref(false),compareSearchResults=ref([]);
@@ -2198,6 +2240,7 @@ setup(){
         openSellModal,submitSell,submitPositionWithConfirm,openAlertModal,submitAlerts,clearAlerts,setStopLoss,setTakeProfit,openDetailModal,closeDetailModal,openTradeDetailModal,closeTradeDetailModal,openAdviceModal,quickAddFromAdvice,quickSellFromAdvice,confirmDelete,deleteTrade,toggleActionMenu,closeActionMenu,
         saveCapital,openCapitalModal,saveCapitalFromModal,showCapitalModal,switchToTradeLog,switchToAnalysis,switchToScreener,switchToReview,switchToStrategy,selectStrategy,
         loadReview,loadRegime,runBacktest,checkAlerts,loadKline,
+        positionAdvice,loadPositionAdvice,showPositionAdviceDetail,
         startScreen,startScreenForce,pollScreenResult,loadScreenResult,quickBuyFromScreen,
         // 【v3.3.1 修复】筛选审计弹窗 - 必须return才能在模板中使用
         showAuditModal,auditStock,auditData,showAuditDetail,hlLabel,metricLabel,metricColorClass,metricFormat,
@@ -2213,6 +2256,15 @@ setup(){
         openWatchTagModal,submitWatchTag,openWatchNoteModal,submitWatchNote,
         openAdviceModalForWatch,openWatchStrategyModal,openKlineModalForWatch,translateStrategy,
         resetParams,onParamChange,confirmRunScreen,
+        // Trade Plan (v3.7 P0)
+        tradePlans,tradePlanLoading,tradePlanFilter,tradePlanModal,tradePlanEditing,tradePlanForm,tradePlanSearch,tradePlanSearchResults,filteredTradePlans,
+        switchToTradePlan,loadTradePlans,searchTradePlanStock,selectTradePlanStock,submitTradePlan,openTradePlanModal,doDeleteTradePlan,doExecuteTradePlan,doCancelTradePlan,checkTradePlanAlerts,
+        tradePlanStatusText,tradePlanStatusClass,tradePlanTypeText,tradePlanTypeClass,
+        // Price Alert (v3.7 P0)
+        priceAlerts,priceAlertLoading,priceAlertModal,priceAlertForm,priceAlertSearch,priceAlertSearchResults,
+        alertNotifications,showAlertCenter,alertCenterLoading,
+        loadPriceAlerts,searchPriceAlertStock,selectPriceAlertStock,submitPriceAlert,doDeletePriceAlert,checkAllAlerts,
+        alertTypeText,alertDirectionText,
         handleExport,handleImport,filterPositions,sortPositions,formatNum,round2,
         compareCodes,compareInput,compareDays,compareData,compareLoading,compareSearchResults,compareColors,
         switchToCompare,selectCompareStock,addCompareCode,removeCompareCode,runCompare,
