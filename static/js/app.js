@@ -1495,7 +1495,9 @@ setup(){
     async function removeWatchItem(w){
         if(!confirm(`确认移除 ${w.name||w.ts_code}？`))return;
         try{
-            const r=await fetchWithAuth(`${API}/api/watch-list/${w.ts_code}`,{method:'DELETE'});
+            const code = w.ts_code;
+            const r=await fetchWithAuth(`${API}/api/watch-list/${encodeURIComponent(code)}`,{method:'DELETE'});
+            if(!r.ok){ const err=await r.json().catch(()=>({error:'删除失败'})); showToast(err.error||'删除失败'); return; }
             const d=await r.json();showToast(d.message);await loadWatchList();
         }catch(e){showToast('移除失败')}
     }

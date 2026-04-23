@@ -2964,7 +2964,15 @@ const addToWatch = async () => {}
 const addAllToWatch = async () => {}
 const showWatchReport = () => {}
 const loadWatchList = async () => {}
-const removeWatchItem = async () => {}
+const removeWatchItem = async (w) => {
+    if(!confirm(`确认移除 ${w.name||w.ts_code}？`))return;
+    try{
+        const code = w.ts_code;
+        const r=await fetchWithAuth(`${API}/api/watch-list/${encodeURIComponent(code)}`,{method:'DELETE'});
+        if(!r.ok){ const err=await r.json().catch(()=>({error:'删除失败'})); showToast(err.error||'删除失败'); return; }
+        const d=await r.json();showToast(d.message);await loadWatchList();
+    }catch(e){showToast('移除失败')}
+}
 const clearWatchList = async () => {}
 const loadWatchReport = async () => {}
 const switchToWatch = () => {}
