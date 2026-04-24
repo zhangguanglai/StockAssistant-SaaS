@@ -1135,6 +1135,17 @@ def get_price_alerts(user_id=1, status=None):
         return [dict(row) for row in cur.fetchall()]
 
 
+def get_price_alert(alert_id, user_id=None):
+    """获取单个价格预警"""
+    with get_cursor() as cur:
+        if user_id is not None:
+            cur.execute("SELECT * FROM price_alerts WHERE id=? AND user_id=?", (alert_id, user_id))
+        else:
+            cur.execute("SELECT * FROM price_alerts WHERE id=?", (alert_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def create_price_alert(user_id=1, **kwargs):
     """创建价格预警"""
     now = datetime.now().isoformat()

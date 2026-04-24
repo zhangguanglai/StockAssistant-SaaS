@@ -18,7 +18,7 @@ from database import (
     get_trades, add_trade as db_add_trade, delete_trade as db_delete_trade,
     get_all_trades, get_trade_stats, get_trades_by_ts_code,
     get_trade_plans, get_trade_plan, create_trade_plan, update_trade_plan, delete_trade_plan,
-    get_price_alerts, create_price_alert, update_price_alert, delete_price_alert,
+    get_price_alerts, get_price_alert, create_price_alert, update_price_alert, delete_price_alert,
 )
 from helpers import (
     pro, is_trade_time, should_use_realtime_source, enrich_positions, calc_position_meta,
@@ -2792,7 +2792,8 @@ def check_trade_plan_triggers():
                 if df.empty:
                     continue
                 current_price = float(df.iloc[-1]["close"])
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] 交易计划行情获取失败 {p.get('ts_code')}: {e}")
             continue
         if p["plan_type"] == "buy" and current_price <= float(trigger_price):
             triggered.append({
@@ -2868,6 +2869,9 @@ def create_new_price_alert():
 def update_existing_price_alert(alert_id):
     """更新价格预警（切换状态/修改阈值）"""
     user_id = get_current_user_id()
+    alert = get_price_alert(alert_id, user_id)
+    if not alert:
+        return jsonify({"error": "价格预警不存在"}), 404
     body = request.get_json()
     updates = {}
     for field in ["name", "threshold", "direction", "status", "note"]:
@@ -2885,6 +2889,9 @@ def update_existing_price_alert(alert_id):
 def remove_price_alert(alert_id):
     """删除价格预警"""
     user_id = get_current_user_id()
+    alert = get_price_alert(alert_id, user_id)
+    if not alert:
+        return jsonify({"error": "价格预警不存在"}), 404
     delete_price_alert(alert_id, user_id)
     return jsonify({"message": "价格预警已删除"})
 
@@ -2912,7 +2919,8 @@ def check_price_alert_triggers():
                     continue
                 current_price = float(df.iloc[-1]["close"])
                 pct_chg = float(df.iloc[-1].get("pct_chg", 0))
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] 价格预警行情获取失败 {a.get('ts_code')}: {e}")
             continue
 
         is_triggered = False
@@ -2931,6 +2939,18 @@ def check_price_alert_triggers():
             elif a["direction"] == "below" and current_price <= a["threshold"]:
                 is_triggered = True
                 msg = f"📉 {a.get('name', a['ts_code'])} 价格跌破：¥{current_price:.2f} ≤ ¥{a['threshold']}"
+        elif a["alert_type"] == "volume_spike":
+            try:
+                df_vol = pro.daily(ts_code=a["ts_code"], end_date=datetime.now().strftime("%Y%m%d"), limit=20)
+                if not df_vol.empty and len(df_vol) >= 6:
+                    today_vol = float(df_vol.iloc[-1]["vol"])
+                    avg_vol = float(df_vol["vol"].iloc[-6:-1].mean())
+                    vol_ratio = round(today_vol / avg_vol, 1) if avg_vol > 0 else 0
+                    if a["direction"] == "above" and vol_ratio >= a["threshold"]:
+                        is_triggered = True
+                        msg = f"📊 {a.get('name', a['ts_code'])} 成交量异动：{vol_ratio}倍 ≥ {a['threshold']}倍"
+            except Exception as e:
+                print(f"[WARN] 成交量预警检查失败 {a['ts_code']}: {e}")
 
         if is_triggered:
             triggered.append({

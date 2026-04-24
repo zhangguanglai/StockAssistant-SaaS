@@ -2939,33 +2939,7 @@
 </div>
 </div>
 </div>
-</div>
 
-<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-<script src="/static/js/app.js?v=54"></script>
-<script>
-// CDN加载失败检测
-document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(function() {
-        var app = document.getElementById('app');
-        // DEBUG: Log actual state before checking
-        console.log('[FALLBACK CHECK] vCloak=' + (app?app.hasAttribute('v-cloak'):'null') + 
-            ' display=' + (app?getComputedStyle(app).display:'n/a') +
-            ' vueApp=' + !!window.__vue_app__ +
-            ' htmlLen=' + (app?app.innerHTML.length:0) +
-            ' first100=' + (app?app.innerHTML.substring(0,100):''));
-        
-        if (app && app.hasAttribute('v-cloak') && getComputedStyle(app).display === 'none') {
-            console.error('[ERROR] Vue.js 加载失败，请检查网络连接或刷新页面');
-            app.innerHTML = '<div style="text-align:center;padding:50px;color:#ff6b6b"><h2>⚠️ 页面加载失败</h2><p>Vue.js 库加载失败，请检查网络连接后刷新页面</p><button onclick="location.reload(true)" style="padding:10px 20px;margin-top:20px;cursor:pointer">强制刷新</button></div>';
-            app.style.display = 'block';
-        } else {
-            console.log('[FALLBACK] NOT triggered - condition not met');
-        }
-    }, 10000);
-});
-</script>
 <!-- Position Advice Detail Modal -->
 <div class="modal-overlay" v-if="showPositionAdviceDetail" @click.self="showPositionAdviceDetail=false">
 <div class="modal" style="max-width:480px">
@@ -3058,6 +3032,35 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="form-actions"><button class="btn" @click="priceAlertModal=false">取消</button><button class="btn btn-primary" @click="submitPriceAlert">保存</button></div>
 </div>
 </div>
+
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="/static/js/app.js?v=54"></script>
+<script>
+// CDN加载失败检测
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(function() {
+        var app = document.getElementById('app');
+        // DEBUG: Log actual state before checking
+        console.log('[FALLBACK CHECK] vCloak=' + (app?app.hasAttribute('v-cloak'):'null') + 
+            ' display=' + (app?getComputedStyle(app).display:'n/a') +
+            ' vueApp=' + !!window.__vue_app__ +
+            ' htmlLen=' + (app?app.innerHTML.length:0) +
+            ' first100=' + (app?app.innerHTML.substring(0,100):''));
+        
+        if (app && app.hasAttribute('v-cloak') && getComputedStyle(app).display === 'none') {
+            console.error('[ERROR] Vue.js 加载失败，请检查网络连接或刷新页面');
+            app.innerHTML = '<div style="text-align:center;padding:50px;color:#ff6b6b"><h2>⚠️ 页面加载失败</h2><p>Vue.js 库加载失败，请检查网络连接后刷新页面</p><button onclick="location.reload(true)" style="padding:10px 20px;margin-top:20px;cursor:pointer">强制刷新</button></div>';
+            app.style.display = 'block';
+        } else {
+            console.log('[FALLBACK] NOT triggered - condition not met');
+        }
+    }, 10000);
+});
+</script>
 
 </body>
 </html>
